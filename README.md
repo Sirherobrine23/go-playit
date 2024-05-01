@@ -1,3 +1,3 @@
-# Proxit
+# go-playit
 
-Crie um túnel parecido com Hamachi para conectar entre servidor - cliente 
+Making tunnels to Server and multiplayers, check playit.gg for more info

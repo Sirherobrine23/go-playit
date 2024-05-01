@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"sirherobrine23.org/playit-cloud/go-agent/api"
-	"sirherobrine23.org/playit-cloud/go-agent/internal/request"
+	"sirherobrine23.org/playit-cloud/go-playit/api"
+	"sirherobrine23.org/playit-cloud/go-playit/internal/request"
 )
 
 type UseAllocDedicatedIp struct {

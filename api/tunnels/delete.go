@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"sirherobrine23.org/playit-cloud/go-agent/api"
-	"sirherobrine23.org/playit-cloud/go-agent/internal/request"
+	"sirherobrine23.org/playit-cloud/go-playit/api"
+	"sirherobrine23.org/playit-cloud/go-playit/internal/request"
 )
 
 func Delete(secret string, tunID string) error {

@@ -1,4 +1,4 @@
-module sirherobrine23.org/playit-cloud/go-agent
+module sirherobrine23.org/playit-cloud/go-playit
 
 go 1.22.2
 
