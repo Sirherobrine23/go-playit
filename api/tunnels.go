@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"slices"
 
@@ -57,8 +56,8 @@ type UseRegion struct {
 }
 
 type TunnelCreateUseAllocation struct {
-	Type string `json:"type"` // "dedicated-ip", "port-allocation" or "region"
-	Data any    `json:"data"` // UseAllocDedicatedIp, UseAllocPortAlloc, Region*
+	Type string `json:"type"`    // "dedicated-ip", "port-allocation" or "region"
+	Data any    `json:"details"` // UseAllocDedicatedIp, UseAllocPortAlloc, UseRegion
 }
 
 func (Alloc *TunnelCreateUseAllocation) Check() error {
@@ -81,9 +80,9 @@ func (Alloc *TunnelCreateUseAllocation) Check() error {
 type Tunnel struct {
 	ID         *uuid.UUID                 `json:"tunnel_id,omitempty"`   // Tunnel UUID
 	Name       string                     `json:"name,omitempty"`        // Tunnel name
-	TunnelType string                     `json:"tunnel_type,omitempty"` // Tunnel type from TunnelType* const's
+	TunnelType string                     `json:"tunnel_type,omitempty"` // Tunnel type from TunnelType const's
 	PortType   string                     `json:"port_type"`             // tcp, udp or both
-	PortCount  uint16                     `json:"port_count"`
+	PortCount  uint16                     `json:"port_count"`            // Port count to assign to connect
 	Origin     TunnelOriginCreate         `json:"origin"`
 	Enabled    bool                       `json:"enabled"`
 	Alloc      *TunnelCreateUseAllocation `json:"alloc,omitempty"`
@@ -101,41 +100,72 @@ func (tun *Tunnel) Create(Token string) error {
 	}
 
 	// encode json body
-	body, err := json.Marshal(&tun)
+	body, err := json.MarshalIndent(&tun, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	res, err := (&request.Request{Base: PlayitAPI, AgentKey: Token, Headers: map[string]string{}}).Request("POST", "/tunnels/create", bytes.NewReader(body))
-	if err != nil {
+	var tunnelId struct {
+		ID string `json:"id"`
+	}
+	if _, err = requestToApi("/tunnels/create", Token, bytes.NewReader(body), &tunnelId, nil); err != nil {
 		return err
 	}
-	defer res.Body.Close()
-	ggo, err := io.ReadAll(res.Body)
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(ggo))
 
+	id, err := uuid.Parse(tunnelId.ID)
+	if err != nil {
+		return err
+	}
+	tun.ID = &id
 	return nil
 }
 
 func (tun *Tunnel) Delete(Token string) error {
-	if tun.ID == nil {
-		return fmt.Errorf("create tunnel to delete or assign tunnel uuid to delete")
-	}
-
-	// encode json body
-	body, err := json.Marshal(&tun)
+	body, err := json.Marshal(struct {
+		TunnelID uuid.UUID `json:"tunnel_id"`
+	}{*tun.ID})
 	if err != nil {
 		return err
 	}
 
 	res, err := (&request.Request{Base: PlayitAPI, AgentKey: Token, Headers: map[string]string{}}).Request("POST", "/tunnels/delete", bytes.NewReader(body))
 	if err != nil {
-		return err
+		if res == nil {
+			return err
+		}
+		defer res.Body.Close()
+		var errStatus struct {
+			Status  string `json:"status"`
+			Message any    `json:"data"`
+		}
+		if err = json.NewDecoder(res.Body).Decode(&errStatus); err != nil {
+			return err
+		}
+		if rtype, containsType := errStatus.Message.(struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}); containsType {
+			return fmt.Errorf("%s: %s", rtype.Type, rtype.Message)
+		}
+		return fmt.Errorf("cannot delete tunnel")
 	}
-	defer res.Body.Close()
 
 	return nil
+}
+
+func ListTunnels(Token string, Agent, Tunnel *uuid.UUID) (*any, error) {
+	tunsBody, err := json.Marshal(struct {
+		Tunnel *uuid.UUID `json:"tunnel_id"`
+		Agent  *uuid.UUID `json:"agent_id"`
+	}{Tunnel, Agent})
+	if err != nil {
+		return nil, err
+	}
+
+	var data any
+	if _, err = requestToApi("/tunnels/list", Token, bytes.NewReader(tunsBody), &data, nil); err != nil {
+		return nil, err
+	}
+
+	return &data, nil
 }

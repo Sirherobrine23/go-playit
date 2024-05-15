@@ -1,8 +1,6 @@
 package api
 
 const (
-	PlayitAPI string = "https://api.playit.gg" // Playit API
-
 	TunnelTypeMCBedrock string = "minecraft-bedrock" // Minecraft Bedrock server
 	TunnelTypeMCJava    string = "minecraft-java"    // Minecraft java server
 	TunnelTypeValheim   string = "valheim"           // valheim
@@ -16,17 +14,18 @@ const (
 	PortTypeTcp  string = "tcp"  // Tunnel support only tcp protocol
 	PortTypeUdp  string = "udp"  // Tunnel support only udp protocol
 
-	RegionSmartGlobal  string = "smart-global"
-	RegionGlobal       string = "global"
-	RegionNorthAmerica string = "north-america"
-	RegionEurope       string = "europe"
-	RegionAsia         string = "asia"
-	RegionIndia        string = "india"
-	RegionSouthAmerica string = "south-america"
+	RegionGlobal       string = "global"        // Free account and premium
+	RegionSmartGlobal  string = "smart-global"  // Require premium account
+	RegionNorthAmerica string = "north-america" // Require premium account
+	RegionEurope       string = "europe"        // Require premium account
+	RegionAsia         string = "asia"          // Require premium account
+	RegionIndia        string = "india"         // Require premium account
+	RegionSouthAmerica string = "south-america" // Require premium account
 )
 
 var (
-	PortType []string = []string{
+	PlayitAPI string   = "https://api.playit.gg" // Playit API
+	PortType  []string = []string{
 		PortTypeBoth,
 		PortTypeTcp,
 		PortTypeUdp,

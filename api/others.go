@@ -1,11 +1,9 @@
 package api
 
 import (
-	"encoding/json"
 	"net"
 
 	"github.com/google/uuid"
-	"sirherobrine23.org/playit-cloud/go-playit/internal/request"
 )
 
 type PortRange struct {
@@ -15,7 +13,7 @@ type PortRange struct {
 
 type AgentTunnel struct {
 	ID             uuid.UUID  `json:"id"`
-	Name           *string    `json:"name"`
+	Name           string     `json:"name"`
 	IpNum          uint16     `json:"ip_num"`
 	RegionNum      uint16     `json:"region_num"`
 	Port           PortRange  `json:"port"`
@@ -24,17 +22,17 @@ type AgentTunnel struct {
 	LocalPort      uint16     `json:"local_port"`
 	TunnelType     string     `json:"tunnel_type"`
 	AssignedDomain string     `json:"assigned_domain"`
-	CustomDomain   *string    `json:"custom_domain"`
+	CustomDomain   string     `json:"custom_domain"`
 	Disabled       *any       `json:"disabled"`
 }
 
 type AgentPendingTunnel struct {
-	ID         uuid.UUID `json:"id"`
-	Name       *string   `json:"name"`
-	PortType   string    `json:"proto"`
-	PortCount  uint16    `json:"port_count"`
-	TunnelType *string   `json:"tunnel_type"`
-	Disabled   bool      `json:"is_disabled"`
+	ID         uuid.UUID `json:"id"`          // Agent ID
+	Name       string    `json:"name"`        // Agent Name
+	PortType   string    `json:"proto"`       // Port type
+	PortCount  uint16    `json:"port_count"`  // Port count
+	TunnelType string    `json:"tunnel_type"` // Tunnel type
+	Disabled   bool      `json:"is_disabled"` // Tunnel is disabled
 }
 
 type AgentRunData struct {
@@ -45,15 +43,11 @@ type AgentRunData struct {
 	TunnelsPending []AgentPendingTunnel `json:"pending"`
 }
 
+// Get agent info
 func AgentInfo(Token string) (*AgentRunData, error) {
-	res, err := (&request.Request{Base: PlayitAPI, Token: Token, Headers: map[string]string{}}).Request("POST", "/agents/rundata", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	defer res.Body.Close()
 	var agent AgentRunData
-	if err = json.NewDecoder(res.Body).Decode(&agent); err != nil {
+	_, err := requestToApi("/agents/rundata", Token, nil, &agent, nil)
+	if err != nil {
 		return nil, err
 	}
 

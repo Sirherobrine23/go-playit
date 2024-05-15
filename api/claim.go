@@ -9,14 +9,12 @@ import (
 	"net/url"
 	"runtime/debug"
 	"time"
-
-	"sirherobrine23.org/playit-cloud/go-playit/internal/request"
 )
 
 type Claim struct {
-	Code      string `json:"code"`       // Claim code
-	Agent     string `json:"agent_type"` // "default" | "assignable" | "self-managed"
-	Version   string `json:"version"`    // Project version
+	Code    string `json:"code"`       // Claim code
+	Agent   string `json:"agent_type"` // "default" | "assignable" | "self-managed"
+	Version string `json:"version"`    // Project version
 }
 
 func MakeClaim(Agent string) (*Claim, error) {
@@ -56,11 +54,6 @@ func (w *Claim) Setup() (string, error) {
 		return "", fmt.Errorf("cannot get go-playit version")
 	}
 
-	req := request.Request{
-		Base:    PlayitAPI,
-		Headers: map[string]string{},
-	}
-
 	var assignSecretRequestBody []byte
 	var err error
 	if assignSecretRequestBody, err = json.MarshalIndent(&w, "", "  "); err != nil {
@@ -68,51 +61,38 @@ func (w *Claim) Setup() (string, error) {
 	}
 
 	for {
-		res, err := req.Request("POST", "/claim/setup", bytes.NewReader(assignSecretRequestBody))
-		if err != nil {
-			return "", err
-		}
-
-		var waitUser struct {
-			Data string `json:"data"`
-		}
-		err = json.NewDecoder(res.Body).Decode(&waitUser)
-		res.Body.Close()
+		var waitUser string
+		_, err = requestToApi("/claim/setup", "", bytes.NewReader(assignSecretRequestBody), &waitUser, nil)
 		if err != nil {
 			return "", err
 		}
 
 		// WaitingForUserVisit, WaitingForUser, UserAccepted, UserRejected
-		if waitUser.Data == "WaitingForUserVisit" || waitUser.Data == "WaitingForUser" {
+		if waitUser == "WaitingForUserVisit" || waitUser == "WaitingForUser" {
 			time.Sleep(time.Millisecond + 200)
 			continue
-		} else if waitUser.Data == "UserRejected" {
+		} else if waitUser == "UserRejected" {
 			return "", fmt.Errorf("claim rejected")
-		} else if waitUser.Data == "UserAccepted" {
+		} else if waitUser == "UserAccepted" {
 			break
 		}
 	}
 
-	exchangeBody, err := json.Marshal(&struct {Code string `json:"code"`}{w.Code})
+	exchangeBody, err := json.Marshal(&struct {
+		Code string `json:"code"`
+	}{w.Code})
 	if err != nil {
 		return "", err
 	}
 
-	res, err := req.Request("POST", "/claim/exchange", bytes.NewBuffer(exchangeBody));
-	if err != nil {
-		return "", err
-	}
-
-	defer res.Body.Close()
 	var requestSecret struct {
-		Data struct {
-			SecretKey string `json:"secret_key"`
-		} `json:"data"`
+		SecretKey string `json:"secret_key"`
 	}
-	if err = json.NewDecoder(res.Body).Decode(&requestSecret); err != nil {
+	_, err = requestToApi("/claim/exchange", "", bytes.NewBuffer(exchangeBody), &requestSecret, nil)
+	if err != nil {
 		return "", err
 	}
 
 	// Set secret to base
-	return requestSecret.Data.SecretKey, nil
+	return requestSecret.SecretKey, nil
 }
