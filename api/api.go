@@ -1,13 +1,7 @@
 package api
 
-import (
-	"net"
-
-	"github.com/google/uuid"
-)
-
 const (
-	PlayitAPI string = "https://api.playit.gg"
+	PlayitAPI string = "https://api.playit.gg" // Playit API
 
 	TunnelTypeMCBedrock string = "minecraft-bedrock" // Minecraft Bedrock server
 	TunnelTypeMCJava    string = "minecraft-java"    // Minecraft java server
@@ -21,6 +15,14 @@ const (
 	PortTypeBoth string = "both" // Tunnel support tcp and udp protocol
 	PortTypeTcp  string = "tcp"  // Tunnel support only tcp protocol
 	PortTypeUdp  string = "udp"  // Tunnel support only udp protocol
+
+	RegionSmartGlobal  string = "smart-global"
+	RegionGlobal       string = "global"
+	RegionNorthAmerica string = "north-america"
+	RegionEurope       string = "europe"
+	RegionAsia         string = "asia"
+	RegionIndia        string = "india"
+	RegionSouthAmerica string = "south-america"
 )
 
 var (
@@ -40,33 +42,12 @@ var (
 		TunnelTypeUnturned,
 	} // Tunnel slice with current supported tunnels
 	Regions []string = []string{
-		"smart-global",
-		"global",
-		"north-america",
-		"europe",
-		"asia",
-		"india",
-		"south-america",
-	}
+		RegionSmartGlobal,
+		RegionGlobal,
+		RegionNorthAmerica,
+		RegionEurope,
+		RegionAsia,
+		RegionIndia,
+		RegionSouthAmerica,
+	} // Regions slice
 )
-
-// default
-type AssignedDefaultCreate struct {
-	LocalIp   net.IPAddr `json:"local_ip"`             // Local ip address
-	LocalPort *uint16    `json:"local_port,omitempty"` // Port or nil
-}
-
-type AssignedManagedCreate struct {
-	AgentID *uuid.UUID `json:"agent_id,omitempty"` // Agent UUID/ID
-}
-
-type AssignedAgentCreate struct {
-	AgentID uuid.UUID `json:"agent_id"` // Agent UUID/ID
-	AssignedDefaultCreate
-}
-
-// Agent origin struct
-type AgentCreate struct {
-	Type string `json:"type"` // Agent type: "default"|"agent"|"managed"
-	Data any    `json:"data"`
-}
