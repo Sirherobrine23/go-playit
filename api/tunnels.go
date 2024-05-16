@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
-	"sirherobrine23.org/playit-cloud/go-playit/internal/request"
 )
 
 type AssignedDefaultCreate struct {
@@ -121,6 +120,10 @@ func (tun *Tunnel) Create(Token string) error {
 }
 
 func (tun *Tunnel) Delete(Token string) error {
+	if tun.ID == nil {
+		return nil
+	}
+	
 	body, err := json.Marshal(struct {
 		TunnelID uuid.UUID `json:"tunnel_id"`
 	}{*tun.ID})
@@ -128,29 +131,20 @@ func (tun *Tunnel) Delete(Token string) error {
 		return err
 	}
 
-	res, err := (&request.Request{Base: PlayitAPI, AgentKey: Token, Headers: map[string]string{}}).Request("POST", "/tunnels/delete", bytes.NewReader(body))
-	if err != nil {
-		if res == nil {
-			return err
-		}
-		defer res.Body.Close()
-		var errStatus struct {
-			Status  string `json:"status"`
-			Message any    `json:"data"`
-		}
-		if err = json.NewDecoder(res.Body).Decode(&errStatus); err != nil {
-			return err
-		}
-		if rtype, containsType := errStatus.Message.(struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		}); containsType {
-			return fmt.Errorf("%s: %s", rtype.Type, rtype.Message)
-		}
-		return fmt.Errorf("cannot delete tunnel")
+	_, err = requestToApi("/tunnels/delete", Token, bytes.NewReader(body), nil, nil)
+	if err == nil {
+		// Clean tun id
+		tun.ID = nil
 	}
+	return err
+}
 
-	return nil
+type TunnelAllocPort struct{}
+
+type TunnelList struct {
+	TCP     TunnelAllocPort `json:"tcp_alloc"`
+	UDP     TunnelAllocPort `json:"udp_alloc"`
+	Tunnels any             `json:"tunnels"`
 }
 
 func ListTunnels(Token string, Agent, Tunnel *uuid.UUID) (*any, error) {
