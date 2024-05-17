@@ -1,45 +1,73 @@
 package tunnel
 
 import (
-	"fmt"
-	"net"
-	"time"
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+
+	"sirherobrine23.org/playit-cloud/go-playit/api"
 )
 
-var (
-	ControlHost string = "control.playit.gg"
-	ControlPort int    = 5525
-)
+type Tunnel struct {
+	ApiClaim api.Claim
+	Clients  map[any]net.Conn
+}
 
-func Connect() error {
-	dial, err := net.Dial("udp", fmt.Sprintf("%s:%d", ControlHost, ControlPort))
+func (Tun *Tunnel) Setup() (net.Conn, error) {
+	controls, err := api.AgentRoutings(Tun.ApiClaim.Secret, nil)
 	if err != nil {
-		return err
-	}
-	dial.SetDeadline(time.Now().Add(time.Duration(time.Second * 3)))
-
-	buff := bytes.NewBuffer(make([]byte, 0))
-	binary.Write(buff, binary.BigEndian, int32(1))
-	binary.Write(buff, binary.BigEndian, int32(1))
-	binary.Write(buff, binary.BigEndian, int32(0))
-	buff.Write([]byte{0})
-
-	fmt.Printf("%+v\n", buff.Bytes())
-	_, err = dial.Write(buff.Bytes())
-	if err != nil {
-		return err
+		return nil, err
 	}
 
-	rec := make([]byte, 16)
-	dial.Read(rec)
-	fmt.Printf("%+v\n", rec)
-	buff = bytes.NewBuffer(rec)
+	IsIPv6 := func (str string) bool {
+		ip := net.ParseIP(str)
+		return ip != nil && strings.Contains(str, ":")
+	}
 
-	var value int64
-	binary.Read(buff, binary.BigEndian, &value)
-	fmt.Printf("%d\n", value)
+	for _, Addr := range append(controls.Targets6, controls.Targets4...) {
+		fmt.Println(Addr.String())
+		connAddress := "%s:5525"
+		if IsIPv6(Addr.String()) {
+			connAddress = "[%s]:5525"
+		}
 
-	return nil
+		conn, err := net.Dial("udp", fmt.Sprintf(connAddress, Addr.String()))
+		if err != nil {
+			continue
+		}
+
+		buffer := bytes.NewBuffer([]byte{1})
+		binary.Write(buffer, binary.BigEndian, time.Now().UnixMilli())
+		binary.Write(buffer, binary.BigEndian, int8(0))
+		binary.Write(buffer, binary.BigEndian, int8(0))
+
+		fmt.Println(buffer.Bytes())
+		size, err := buffer.WriteTo(conn)
+		buffer.Reset()
+
+		if err != nil {
+			conn.Close()
+			continue // Skip connetion
+		} else if size > 0 {
+			var size int
+			buffer := make([]byte, 2048)
+			for l := 5; l != 0; l-- {
+				conn.SetReadDeadline(time.Now().Add(time.Millisecond * 5))
+				size, err = conn.Read(buffer)
+				if err != nil {
+					continue
+				}
+
+				fmt.Println(size)
+				fmt.Println(buffer)
+
+			}
+			return conn, err
+		}
+	}
+
+	return nil, nil
 }

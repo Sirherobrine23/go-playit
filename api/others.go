@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"net"
 
 	"github.com/google/uuid"
@@ -12,18 +14,18 @@ type PortRange struct {
 }
 
 type AgentTunnel struct {
-	ID             uuid.UUID  `json:"id"`
-	Name           string     `json:"name"`
-	IpNum          uint16     `json:"ip_num"`
-	RegionNum      uint16     `json:"region_num"`
-	Port           PortRange  `json:"port"`
-	Proto          string     `json:"proto"`
-	LocalIp        net.IPAddr `json:"local_ip"`
-	LocalPort      uint16     `json:"local_port"`
-	TunnelType     string     `json:"tunnel_type"`
-	AssignedDomain string     `json:"assigned_domain"`
-	CustomDomain   string     `json:"custom_domain"`
-	Disabled       *any       `json:"disabled"`
+	ID             uuid.UUID `json:"id"`
+	Name           string    `json:"name"`
+	IpNum          uint16    `json:"ip_num"`
+	RegionNum      uint16    `json:"region_num"`
+	Port           PortRange `json:"port"`
+	Proto          string    `json:"proto"`
+	LocalIp        net.IP    `json:"local_ip"`
+	LocalPort      uint16    `json:"local_port"`
+	TunnelType     string    `json:"tunnel_type"`
+	AssignedDomain string    `json:"assigned_domain"`
+	CustomDomain   string    `json:"custom_domain"`
+	Disabled       *any      `json:"disabled"`
 }
 
 type AgentPendingTunnel struct {
@@ -52,4 +54,26 @@ func AgentInfo(Token string) (*AgentRunData, error) {
 	}
 
 	return &agent, nil
+}
+
+type AgentRouting struct {
+	Agent    uuid.UUID `json:"agent_id"`
+	Targets4 []net.IP  `json:"targets4"`
+	Targets6 []net.IP  `json:"targets6"`
+}
+
+func AgentRoutings(Token string, AgentID *uuid.UUID) (*AgentRouting, error) {
+	body, err := json.Marshal(struct {
+		Agent *uuid.UUID `json:"agent_id,omitempty"`
+	}{AgentID})
+	if err != nil {
+		return nil, err
+	}
+
+	var data AgentRouting
+	if _, err = requestToApi("/agents/routing/get", Token, bytes.NewReader(body), &data, nil); err != nil {
+		return nil, err
+	}
+
+	return &data, nil
 }

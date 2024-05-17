@@ -52,7 +52,10 @@ func requestToApi(Path, Token string, Body io.Reader, Response any, Headers map[
 			Type    string `json:"type"`
 			Message string `json:"message"`
 		}
-		if err = recodeJson(&ResBody.Data, &errStatus); err != nil {
+
+		if data, is := ResBody.Data.(string); is {
+			return res, fmt.Errorf(data)
+		} else if err = recodeJson(&ResBody.Data, &errStatus); err != nil {
 			return res, err
 		}
 		if len(errStatus.Message) > 0 {

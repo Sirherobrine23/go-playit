@@ -26,7 +26,7 @@ type AssignedManagedCreate struct {
 }
 
 type TunnelOriginCreate struct {
-	Type  string `json:"type"` // Agent type: default, agent or maneged
+	Type  string `json:"type"` // Agent type: default, agent or managed
 	Agent any    `json:"data"` // Assingned agent
 }
 
@@ -35,8 +35,8 @@ func (Origin *TunnelOriginCreate) Check() error {
 		return fmt.Errorf("current agent is default, so Agent don't is AssignedDefaultCreate")
 	} else if _, isAgentCreate := Origin.Agent.(AssignedAgentCreate); Origin.Type == "agent" && !isAgentCreate {
 		return fmt.Errorf("current agent is agent, so Agent don't is AssignedAgentCreate")
-	} else if _, isManagedCreate := Origin.Agent.(AssignedManagedCreate); Origin.Type == "maneged" && !isManagedCreate {
-		return fmt.Errorf("current maneged is default, so Agent don't is AssignedManagedCreate")
+	} else if _, isManagedCreate := Origin.Agent.(AssignedManagedCreate); Origin.Type == "managed" && !isManagedCreate {
+		return fmt.Errorf("current managed is default, so Agent don't is AssignedManagedCreate")
 	}
 	return nil
 }
@@ -104,6 +104,8 @@ func (tun *Tunnel) Create(Token string) error {
 		return err
 	}
 
+	fmt.Println(string(body))
+
 	var tunnelId struct {
 		ID string `json:"id"`
 	}
@@ -123,7 +125,7 @@ func (tun *Tunnel) Delete(Token string) error {
 	if tun.ID == nil {
 		return nil
 	}
-	
+
 	body, err := json.Marshal(struct {
 		TunnelID uuid.UUID `json:"tunnel_id"`
 	}{*tun.ID})

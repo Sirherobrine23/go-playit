@@ -12,6 +12,7 @@ import (
 )
 
 type Claim struct {
+	Secret  string `json:"-"`          // Secret
 	Code    string `json:"code"`       // Claim code
 	Agent   string `json:"agent_type"` // "default" | "assignable" | "self-managed"
 	Version string `json:"version"`    // Project version
@@ -94,5 +95,6 @@ func (w *Claim) Setup() (string, error) {
 	}
 
 	// Set secret to base
-	return requestSecret.SecretKey, nil
+	w.Secret = requestSecret.SecretKey
+	return w.Secret, nil
 }
