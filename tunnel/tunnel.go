@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"strings"
@@ -22,7 +21,7 @@ func (Tun *Tunnel) Setup() (net.Conn, error) {
 		return nil, err
 	}
 
-	IsIPv6 := func (str string) bool {
+	IsIPv6 := func(str string) bool {
 		ip := net.ParseIP(str)
 		return ip != nil && strings.Contains(str, ":")
 	}
@@ -39,34 +38,57 @@ func (Tun *Tunnel) Setup() (net.Conn, error) {
 			continue
 		}
 
-		buffer := bytes.NewBuffer([]byte{1})
-		binary.Write(buffer, binary.BigEndian, time.Now().UnixMilli())
-		binary.Write(buffer, binary.BigEndian, int8(0))
-		binary.Write(buffer, binary.BigEndian, int8(0))
+		buffer := bytes.NewBuffer([]byte{})
+		(&ControlRpcMessage{
+			RequestID: 1,
+			Content: &ControlRequest{
+				Data: Ping{
+					Now:         time.Now(),
+					CurrentPing: nil,
+					SessionID:   nil,
+				},
+			},
+		}).WriteTo(buffer)
 
-		fmt.Println(buffer.Bytes())
-		size, err := buffer.WriteTo(conn)
-		buffer.Reset()
-
+		_, err = buffer.WriteTo(conn)
 		if err != nil {
 			conn.Close()
-			continue // Skip connetion
-		} else if size > 0 {
-			var size int
-			buffer := make([]byte, 2048)
-			for l := 5; l != 0; l-- {
-				conn.SetReadDeadline(time.Now().Add(time.Millisecond * 5))
-				size, err = conn.Read(buffer)
-				if err != nil {
-					continue
-				}
-
-				fmt.Println(size)
-				fmt.Println(buffer)
-
-			}
-			return conn, err
+			return nil, err
 		}
+
+		buffer.Reset()
+		conn.SetReadDeadline(time.Now().Add(time.Second * 5))
+
+		bytesRead := make([]byte, 2048)
+		_, err = conn.Read(bytesRead)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+
+		reader := bytes.NewReader(bytesRead)
+		res := ControlFeed{}
+		if err := res.ReadFrom(reader); err != nil {
+			return nil, err
+		}
+		fmt.Printf("%+v\n", res.Data)
+
+		rpc := res.Data
+		if rpc.RequestID != 1 {
+			return nil, fmt.Errorf("got response with unexpected request_id")
+		}
+
+		fmt.Printf("%+v\n", rpc.Content)
+		pong, isPong := rpc.Content.(*ControlResponse).Data.(Pong)
+		if !isPong {
+			return nil, fmt.Errorf("expected pong got other response")
+		}
+
+		fmt.Printf("%+v\n", pong)
+		fmt.Printf("%+v\n", pong.ClientAddress.Ip.String())
+		fmt.Printf("%+v\n", pong.TunnelAddress.Ip.String())
+
+		return conn, err
 	}
 
 	return nil, nil
