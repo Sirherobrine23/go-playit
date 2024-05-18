@@ -15,6 +15,8 @@ type Tunnel struct {
 	Clients  map[any]net.Conn
 }
 
+type ConnectedControl struct {}
+
 func (Tun *Tunnel) Setup() (net.Conn, error) {
 	controls, err := api.AgentRoutings(Tun.ApiClaim.Secret, nil)
 	if err != nil {
@@ -39,16 +41,21 @@ func (Tun *Tunnel) Setup() (net.Conn, error) {
 		}
 
 		buffer := bytes.NewBuffer([]byte{})
-		(&ControlRpcMessage{
+		err = (&ControlRpcMessage{
 			RequestID: 1,
 			Content: &ControlRequest{
-				Data: Ping{
+				Ping: &Ping{
 					Now:         time.Now(),
 					CurrentPing: nil,
 					SessionID:   nil,
 				},
 			},
 		}).WriteTo(buffer)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		fmt.Printf("Rpc Go, Size: %d, Data: %+v\n", len(buffer.Bytes()), buffer.Bytes())
 
 		_, err = buffer.WriteTo(conn)
 		if err != nil {
@@ -65,28 +72,27 @@ func (Tun *Tunnel) Setup() (net.Conn, error) {
 			conn.Close()
 			return nil, err
 		}
+		fmt.Printf("Rpl Go, Size: %d, Data: %+v\n", len(bytesRead), bytesRead)
 
 		reader := bytes.NewReader(bytesRead)
 		res := ControlFeed{}
 		if err := res.ReadFrom(reader); err != nil {
 			return nil, err
-		}
-		fmt.Printf("%+v\n", res.Data)
-
-		rpc := res.Data
-		if rpc.RequestID != 1 {
+		} else if res.Response == nil || res.Response.RequestID != 1 {
+			conn.Close()
 			return nil, fmt.Errorf("got response with unexpected request_id")
 		}
 
-		fmt.Printf("%+v\n", rpc.Content)
-		pong, isPong := rpc.Content.(*ControlResponse).Data.(Pong)
-		if !isPong {
-			return nil, fmt.Errorf("expected pong got other response")
+		Response, isResponse := res.Response.Content.(*ControlResponse)
+		if !isResponse {
+			conn.Close()
+			return nil, fmt.Errorf("expected controlRequest")
 		}
 
-		fmt.Printf("%+v\n", pong)
-		fmt.Printf("%+v\n", pong.ClientAddress.Ip.String())
-		fmt.Printf("%+v\n", pong.TunnelAddress.Ip.String())
+		if Response.Pong == nil {
+			conn.Close()
+			return nil, fmt.Errorf("expected pong got other response")
+		}
 
 		return conn, err
 	}
