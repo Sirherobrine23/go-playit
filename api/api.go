@@ -1,6 +1,8 @@
 package api
 
 const (
+	GoPlayitVersion string = "0.17.1"
+
 	TunnelTypeMCBedrock string = "minecraft-bedrock" // Minecraft Bedrock server
 	TunnelTypeMCJava    string = "minecraft-java"    // Minecraft java server
 	TunnelTypeValheim   string = "valheim"           // valheim
@@ -50,3 +52,8 @@ var (
 		RegionSouthAmerica,
 	} // Regions slice
 )
+
+type Api struct {
+	Code   string // Claim code
+	Secret string // Agent Secret
+}

@@ -8,7 +8,7 @@ import (
 )
 
 func recodeJson(from, to any) error {
-	buff, err := json.Marshal(&from)
+	buff, err := json.MarshalIndent(&from, "", "  ")
 	if err != nil {
 		return err
 	} else if err = json.Unmarshal(buff, to); err != nil {
@@ -17,7 +17,7 @@ func recodeJson(from, to any) error {
 	return nil
 }
 
-func requestToApi(Path, Token string, Body io.Reader, Response any, Headers map[string]string) (*http.Response, error) {
+func (w *Api) requestToApi(Path string, Body io.Reader, Response any, Headers map[string]string) (*http.Response, error) {
 	req, err := http.NewRequest("POST", fmt.Sprintf("%s%s", PlayitAPI, Path), Body)
 	if err != nil {
 		return nil, err
@@ -29,8 +29,8 @@ func requestToApi(Path, Token string, Body io.Reader, Response any, Headers map[
 	}
 
 	// Set agent token
-	if len(Token) > 0 {
-		req.Header.Set("Authorization", fmt.Sprintf("Agent-Key %s", Token))
+	if len(w.Secret) > 0 {
+		req.Header.Set("Authorization", fmt.Sprintf("Agent-Key %s", w.Secret))
 	}
 
 	res, err := (&http.Client{}).Do(req)

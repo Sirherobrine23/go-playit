@@ -7,94 +7,94 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"runtime/debug"
+	"slices"
 	"time"
 )
 
-type Claim struct {
-	Secret  string `json:"-"`          // Secret
-	Code    string `json:"code"`       // Claim code
-	Agent   string `json:"agent_type"` // "default" | "assignable" | "self-managed"
-	Version string `json:"version"`    // Project version
-}
+var (
+	ClaimAgents     []string = []string{
+		"default", "assignable", "self-managed",
+	}
+)
 
-func MakeClaim(Agent string) (*Claim, error) {
-	cl, buf := Claim{}, make([]byte, 5)
-	if _, err := rand.Read(buf); err != nil {
-		return nil, err
+func (w *Api) AiisgnClaimCode() (err error) {
+	if len(w.Code) > 0 {
+		return nil
 	}
 
-	cl.Code = hex.EncodeToString(buf)
-	cl.Agent = Agent
-	return &cl, nil
+	// Make code buffer
+	codeBuff := make([]byte, 5)
+	if _, err = rand.Read(codeBuff); err != nil {
+		return err
+	}
+
+	// Convert to hex string
+	w.Code = hex.EncodeToString(codeBuff)
+	return nil
 }
 
 // Get claim url
-func (w *Claim) Url() string {
+func (w *Api) ClaimUrl() string {
 	return fmt.Sprintf("https://playit.gg/claim/%s", url.PathEscape(w.Code))
 }
 
-// Get agent secret key
-func (w *Claim) Setup() (string, error) {
-	if len(w.Agent) == 0 {
-		return "", fmt.Errorf("set agent type")
+func (w *Api) ClaimAgentSecret(AgentType string) error {
+	if w.Code == "" {
+		return fmt.Errorf("assign claim code")
+	} else if w.Secret != "" {
+		return fmt.Errorf("agent secret key ared located")
+	} else if !slices.Contains(ClaimAgents, AgentType) {
+		return fmt.Errorf("set valid agent type")
 	}
 
-	// Get agent version
-	w.Version = ""
-	info, ok := debug.ReadBuildInfo()
-	if ok {
-		for _, dep := range info.Deps {
-			if dep.Path == "sirherobrine23.org/playit-cloud/go-playit" {
-				w.Version = fmt.Sprintf("go-playit %s", dep.Version)
-				break
-			}
-		}
+	type Claim struct {
+		Code    string `json:"code"`       // Claim code
+		Agent   string `json:"agent_type"` // "default" | "assignable" | "self-managed"
+		Version string `json:"version"`    // Project version
 	}
-	if len(w.Version) == 0 {
-		return "", fmt.Errorf("cannot get go-playit version")
+	type Code struct {
+		Code      string `json:"code,omitempty"`
+		SecretKey string `json:"secret_key,omitempty"`
 	}
 
-	var assignSecretRequestBody []byte
-	var err error
-	if assignSecretRequestBody, err = json.MarshalIndent(&w, "", "  "); err != nil {
-		return "", err
+	assignSecretRequestBody, err := json.Marshal(Claim{
+		Code:    w.Code,
+		Agent:   AgentType,
+		Version: fmt.Sprintf("go-playit %s", GoPlayitVersion),
+	})
+	if err != nil {
+		return err
 	}
 
 	for {
 		var waitUser string
-		_, err = requestToApi("/claim/setup", "", bytes.NewReader(assignSecretRequestBody), &waitUser, nil)
+		_, err = w.requestToApi("/claim/setup", bytes.NewReader(assignSecretRequestBody[:]), &waitUser, nil)
 		if err != nil {
-			return "", err
+			return err
 		}
 
-		// WaitingForUserVisit, WaitingForUser, UserAccepted, UserRejected
-		if waitUser == "WaitingForUserVisit" || waitUser == "WaitingForUser" {
-			time.Sleep(time.Millisecond + 200)
-			continue
-		} else if waitUser == "UserRejected" {
-			return "", fmt.Errorf("claim rejected")
+		if waitUser == "UserRejected" {
+			return fmt.Errorf("claim rejected")
 		} else if waitUser == "UserAccepted" {
 			break
 		}
+		// wait for request
+		time.Sleep(time.Second)
 	}
+	var getCode Code
+	getCode.Code = w.Code
 
-	exchangeBody, err := json.Marshal(&struct {
-		Code string `json:"code"`
-	}{w.Code})
+	// Code to json
+	exchangeBody, err := json.Marshal(getCode)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	var requestSecret struct {
-		SecretKey string `json:"secret_key"`
-	}
-	_, err = requestToApi("/claim/exchange", "", bytes.NewBuffer(exchangeBody), &requestSecret, nil)
+	_, err = w.requestToApi("/claim/exchange", bytes.NewBuffer(exchangeBody), &getCode, nil)
 	if err != nil {
-		return "", err
+		return err
 	}
+	w.Secret = getCode.SecretKey // Copy secret key to Api struct
 
-	// Set secret to base
-	w.Secret = requestSecret.SecretKey
-	return w.Secret, nil
+	return nil
 }

@@ -4,8 +4,21 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 )
+
+type RawSlice struct {
+	Buff []byte
+}
+
+func (w *RawSlice) WriteTo(I io.Writer) error {
+	_, err := I.Write(w.Buff)
+	return err
+}
+func (w *RawSlice) ReadFrom(I io.Reader) error {
+	_, err := I.Read(w.Buff)
+	return err
+}
 
 func ReadU8(w io.Reader) uint8 {
 	var value uint8
@@ -54,6 +67,11 @@ func ReadBuff(w io.Reader, buff []byte) error {
 		}
 	}
 	return nil
+}
+
+func ReadBuffN(w io.Reader, size int) ([]byte, error) {
+	buff := make([]byte, size)
+	return buff, ReadBuff(w, buff)
 }
 
 func ReadU8Buff(w io.Reader, buff []uint8) error {
@@ -152,41 +170,46 @@ func WriteOptionU64(w io.Writer, value *uint64) error {
 }
 
 type AddressPort struct {
-	IP   net.IP
-	Port uint16
-}
-
-func (sock *AddressPort) ReadFrom(w io.Reader) error {
-	switch ReadU8(w) {
-	case 4:
-		sock.IP = net.IPv4(ReadU8(w), ReadU8(w), ReadU8(w), ReadU8(w))
-		sock.Port = ReadU16(w)
-		return nil
-	case 6:
-		sock.IP = make([]uint8, 16)
-		ReadBuff(w, sock.IP)
-		sock.Port = ReadU16(w)
-		return nil
-	}
-	return fmt.Errorf("cannot get IP type")
+	netip.AddrPort
 }
 
 func (sock *AddressPort) WriteTo(w io.Writer) error {
-	if sock.IP.To4() == nil {
+	addr := sock.Addr()
+	ip, _ := addr.MarshalBinary()
+	if addr.Is6() {
 		if err := WriteU8(w, uint8(6)); err != nil {
 			return err
-		} else if _, err = w.Write(sock.IP.To16()); err != nil {
+		} else if _, err = w.Write(ip); err != nil {
 			return err
 		}
 	} else {
 		if err := WriteU8(w, uint8(4)); err != nil {
 			return err
-		} else if _, err = w.Write(sock.IP.To4()); err != nil {
+		} else if _, err = w.Write(ip); err != nil {
 			return err
 		}
 	}
-	if err := WriteU16(w, sock.Port); err != nil {
+	if err := WriteU16(w, sock.Port()); err != nil {
 		return err
 	}
 	return nil
+}
+func (sock *AddressPort) ReadFrom(w io.Reader) error {
+	switch ReadU8(w) {
+	case 4:
+		buff, err := ReadBuffN(w, 4)
+		if err != nil {
+			return err
+		}
+		sock.AddrPort = netip.AddrPortFrom(netip.AddrFrom4([4]byte(buff)), ReadU16(w))
+		return nil
+	case 6:
+		buff, err := ReadBuffN(w, 16)
+		if err != nil {
+			return err
+		}
+		sock.AddrPort = netip.AddrPortFrom(netip.AddrFrom16([16]byte(buff)), ReadU16(w))
+		return nil
+	}
+	return fmt.Errorf("cannot get IP type")
 }

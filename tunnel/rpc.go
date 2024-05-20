@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"fmt"
 	"io"
 )
 
@@ -10,26 +9,19 @@ type MessageEncoding interface {
 	ReadFrom(I io.Reader) error
 }
 
-type ControlRpcMessage struct {
+type ControlRpcMessage[T MessageEncoding] struct {
 	RequestID uint64
-	Content   any
+	Content   T // Convert with .(*type)
 }
 
-func (w *ControlRpcMessage) WriteTo(I io.Writer) error {
-	contentWrite, isEncoding := w.Content.(MessageEncoding)
-	if !isEncoding {
-		return fmt.Errorf("Content not is MessageEncoding")
-	} else if err := WriteU64(I, w.RequestID); err != nil {
+func (w *ControlRpcMessage[T]) WriteTo(I io.Writer) error {
+	if err := WriteU64(I, w.RequestID); err != nil {
 		return err
 	}
-	return contentWrite.WriteTo(I)
+	return w.Content.WriteTo(I)
 }
 
-func (w *ControlRpcMessage) ReadFrom(I io.Reader) error {
-	contentWrite, isEncoding := w.Content.(MessageEncoding)
-	if !isEncoding {
-		return fmt.Errorf("Content not is MessageEncoding")
-	}
+func (w *ControlRpcMessage[T]) ReadFrom(I io.Reader) error {
 	w.RequestID = ReadU64(I)
-	return contentWrite.ReadFrom(I)
+	return w.Content.ReadFrom(I)
 }

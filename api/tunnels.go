@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -53,10 +54,28 @@ type UseAllocPortAlloc struct {
 type UseRegion struct {
 	Region string `json:"region"`
 }
-
+/**
+"status": "allocated",
+"data": {
+	"assigned_domain": "going-scales.gl.at.ply.gg",
+	"assigned_srv": null,
+	"assignment": {
+		"type": "shared-ip"
+	},
+	"id": "f667b538-0294-4817-9332-5cba5e94d79e",
+	"ip_hostname": "19.ip.gl.ply.gg",
+	"ip_type": "both",
+	"port_end": 49913,
+	"port_start": 49912,
+	"region": "global",
+	"static_ip4": "147.185.221.19",
+	"tunnel_ip": "2602:fbaf:0:1::13"
+}
+*/
 type TunnelCreateUseAllocation struct {
-	Type string `json:"type"`    // "dedicated-ip", "port-allocation" or "region"
-	Data any    `json:"details"` // UseAllocDedicatedIp, UseAllocPortAlloc, UseRegion
+	Status string `json:"status"`  // For tunnel list
+	Type   string `json:"type"`    // "dedicated-ip", "port-allocation" or "region"
+	Data   any    `json:"details"` // UseAllocDedicatedIp, UseAllocPortAlloc, UseRegion
 }
 
 func (Alloc *TunnelCreateUseAllocation) Check() error {
@@ -88,7 +107,7 @@ type Tunnel struct {
 	Firewall   *uuid.UUID                 `json:"firewall_id,omitempty"` // Firewall ID
 }
 
-func (tun *Tunnel) Create(Token string) error {
+func (w *Api) CreateTunnel(tun Tunnel) error {
 	var err error
 	if err = tun.Alloc.Check(); err != nil {
 		return err
@@ -104,64 +123,104 @@ func (tun *Tunnel) Create(Token string) error {
 		return err
 	}
 
-	fmt.Println(string(body))
-
 	var tunnelId struct {
-		ID string `json:"id"`
+		ID uuid.UUID `json:"id"`
 	}
-	if _, err = requestToApi("/tunnels/create", Token, bytes.NewReader(body), &tunnelId, nil); err != nil {
+	if _, err = w.requestToApi("/tunnels/create", bytes.NewReader(body), &tunnelId, nil); err != nil {
 		return err
 	}
+	tun.ID = &tunnelId.ID
 
-	id, err := uuid.Parse(tunnelId.ID)
+	info, err := w.AgentInfo()
 	if err != nil {
 		return err
 	}
-	tun.ID = &id
+
+	for {
+		tuns, err := w.ListTunnels(tun.ID, &info.ID)
+		if err != nil {
+			return err
+		}
+		if tuns.Tunnels[0].Alloc.Status == "pending" {
+			time.Sleep(time.Second * 2)
+			continue
+		}
+		break
+	}
+
 	return nil
 }
 
-func (tun *Tunnel) Delete(Token string) error {
-	if tun.ID == nil {
+func (w *Api) DeleteTunnel(TunnelID *uuid.UUID) error {
+	if TunnelID == nil {
 		return nil
 	}
-
 	body, err := json.Marshal(struct {
 		TunnelID uuid.UUID `json:"tunnel_id"`
-	}{*tun.ID})
+	}{*TunnelID})
 	if err != nil {
 		return err
 	}
 
-	_, err = requestToApi("/tunnels/delete", Token, bytes.NewReader(body), nil, nil)
-	if err == nil {
-		// Clean tun id
-		tun.ID = nil
-	}
+	_, err = w.requestToApi("/tunnels/delete", bytes.NewReader(body), nil, nil)
 	return err
 }
 
-type TunnelAllocPort struct{}
-
-type TunnelList struct {
-	TCP     TunnelAllocPort `json:"tcp_alloc"`
-	UDP     TunnelAllocPort `json:"udp_alloc"`
-	Tunnels any             `json:"tunnels"`
+type AccountTunnel struct {
+	ID         uuid.UUID          `json:"id"`
+	TunnelType string             `json:"tunnel_type"`
+	CreatedAt  time.Time          `json:"created_at"`
+	Name       string             `json:"name"`
+	PortType   string             `json:"port_type"`
+	PortCount  int32              `json:"port_count"`
+	Alloc      TunnelCreateUseAllocation                `json:"alloc"`
+	Origin     TunnelOriginCreate `json:"origin"`
+	Domain     *struct {
+		ID         uuid.UUID `json:"id"`
+		Name       string    `json:"name"`
+		IsExternal bool      `json:"is_external"`
+		Parent     string    `json:"parent"`
+		Source     string    `json:"source"`
+	} `json:"domain"`
+	FirewallID string `json:"firewall_id"`
+	Ratelimit  struct {
+		BytesSecs   uint64 `json:"bytes_per_second"`
+		PacketsSecs uint64 `json:"packets_per_second"`
+	} `json:"ratelimit"`
+	Active         bool   `json:"active"`
+	DisabledReason string `json:"disabled_reason"`
+	Region         string `json:"region"`
+	ExpireNotice   *struct {
+		Disable time.Time `json:"disable_at"`
+		Remove  time.Time `json:"remove_at"`
+	} `json:"expire_notice"`
 }
 
-func ListTunnels(Token string, Agent, Tunnel *uuid.UUID) (*any, error) {
-	tunsBody, err := json.Marshal(struct {
-		Tunnel *uuid.UUID `json:"tunnel_id"`
-		Agent  *uuid.UUID `json:"agent_id"`
-	}{Tunnel, Agent})
+type AlloctedPorts struct {
+	Allowed uint16 `json:"allowed"`
+	Claimed uint16 `json:"claimed"`
+	Desired uint16 `json:"desired"`
+}
+
+type AccountTunnels struct {
+	Tcp     AlloctedPorts   `json:"tcp_alloc"`
+	Udp     AlloctedPorts   `json:"udp_alloc"`
+	Tunnels []AccountTunnel `json:"tunnels"`
+}
+
+func (w *Api) ListTunnels(TunnelID, AgentID *uuid.UUID) (*AccountTunnels, error) {
+	type TunList struct {
+		TunnelID *uuid.UUID `json:"tunnel_id,omitempty"`
+		AgentID  *uuid.UUID `json:"agent_id,omitempty"`
+	}
+	body, err := json.Marshal(TunList{TunnelID, AgentID})
 	if err != nil {
 		return nil, err
 	}
 
-	var data any
-	if _, err = requestToApi("/tunnels/list", Token, bytes.NewReader(tunsBody), &data, nil); err != nil {
+	var Tuns AccountTunnels
+	if _, err := w.requestToApi("/tunnels/list", bytes.NewBuffer(body), &Tuns, nil); err != nil {
 		return nil, err
 	}
-
-	return &data, nil
+	return &Tuns, nil
 }

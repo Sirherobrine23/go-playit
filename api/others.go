@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net"
+	"net/netip"
 
 	"github.com/google/uuid"
 )
@@ -46,9 +47,9 @@ type AgentRunData struct {
 }
 
 // Get agent info
-func AgentInfo(Token string) (*AgentRunData, error) {
+func (w *Api) AgentInfo() (*AgentRunData, error) {
 	var agent AgentRunData
-	_, err := requestToApi("/agents/rundata", Token, nil, &agent, nil)
+	_, err := w.requestToApi("/agents/rundata", nil, &agent, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -57,12 +58,12 @@ func AgentInfo(Token string) (*AgentRunData, error) {
 }
 
 type AgentRouting struct {
-	Agent    uuid.UUID `json:"agent_id"`
-	Targets4 []net.IP  `json:"targets4"`
-	Targets6 []net.IP  `json:"targets6"`
+	Agent    uuid.UUID    `json:"agent_id"`
+	Targets4 []netip.Addr `json:"targets4"`
+	Targets6 []netip.Addr `json:"targets6"`
 }
 
-func AgentRoutings(Token string, AgentID *uuid.UUID) (*AgentRouting, error) {
+func (w *Api) AgentRoutings(AgentID *uuid.UUID) (*AgentRouting, error) {
 	body, err := json.Marshal(struct {
 		Agent *uuid.UUID `json:"agent_id,omitempty"`
 	}{AgentID})
@@ -71,9 +72,51 @@ func AgentRoutings(Token string, AgentID *uuid.UUID) (*AgentRouting, error) {
 	}
 
 	var data AgentRouting
-	if _, err = requestToApi("/agents/routing/get", Token, bytes.NewReader(body), &data, nil); err != nil {
+	if _, err = w.requestToApi("/agents/routing/get", bytes.NewReader(body), &data, nil); err != nil {
 		return nil, err
 	}
 
 	return &data, nil
+}
+
+type AgentVersion struct {
+	Platform string `json:"platform,omitempty"` // linux, freebsd, windows, macos, android, ios, minecraft-plugin, unknown
+	Version  string `json:"version"`
+}
+
+type PlayitAgentVersion struct {
+	Official       bool         `json:"official"`
+	DetailsWebsite string       `json:"details_website"`
+	Version        AgentVersion `json:"version"`
+}
+
+func (w *Api) ProtoRegisterRegister(Client, Tunnel netip.AddrPort) (string, error) {
+	type ProtoRegister struct {
+		ClientAddr   *netip.AddrPort    `json:"client_addr"`
+		TunnelAddr   *netip.AddrPort    `json:"tunnel_addr"`
+		AgentVersion PlayitAgentVersion `json:"agent_version"`
+	}
+
+	body, err := json.MarshalIndent(ProtoRegister{
+		ClientAddr: &Client,
+		TunnelAddr: &Tunnel,
+		AgentVersion: PlayitAgentVersion{
+			Official:       false,
+			DetailsWebsite: "https://sirherobrine23.org/playit-cloud/go-playit",
+			Version: AgentVersion{
+				Version:  GoPlayitVersion,
+				Platform: "unknown",
+			},
+		},
+	}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	var code struct {
+		Key string `json:"key"`
+	}
+	if _, err = w.requestToApi("/proto/register", bytes.NewBuffer(body), &code, nil); err != nil {
+		return "", err
+	}
+	return code.Key, nil
 }

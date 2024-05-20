@@ -79,29 +79,103 @@ func (w *Pong) WriteTo(I io.Writer) error {
 func (w *Pong) ReadFrom(I io.Reader) error {
 	w.RequestNow, w.ServerNow, w.ServerId = ReadU64(I), ReadU64(I), ReadU64(I)
 	w.DataCenterId = ReadU32(I)
-
 	w.ClientAddr = AddressPort{}
-	w.ClientAddr.ReadFrom(I)
-
 	w.TunnelAddr = AddressPort{}
-	w.TunnelAddr.ReadFrom(I)
+
+	if err := w.ClientAddr.ReadFrom(I); err != nil {
+		return err
+	} else if err := w.TunnelAddr.ReadFrom(I); err != nil {
+		return err
+	}
 
 	Sess := ReadU64(I)
 	w.SessionExpireAt = &Sess
 	return nil
 }
 
-type AgentRegister struct{}
+type AgentRegister struct {
+	AccountID, AgentId, AgentVersion, Timestamp uint64
+	ClientAddr, TunnelAddr                      AddressPort
+	Signature                                   []byte // 32 bytes
+}
 
-func (w *AgentRegister) WriteTo(I io.Writer) error  { return nil }
-func (w *AgentRegister) ReadFrom(I io.Reader) error { return nil }
+func (w *AgentRegister) WritePlain(buff io.Writer) error {
+	if err := WriteU64(buff, w.AccountID); err != nil {
+		return err
+	} else if err := WriteU64(buff, w.AgentId); err != nil {
+		return err
+	} else if err := WriteU64(buff, w.AgentVersion); err != nil {
+		return err
+	} else if err := WriteU64(buff, w.Timestamp); err != nil {
+		return err
+	} else if err := w.ClientAddr.WriteTo(buff); err != nil {
+		return err
+	} else if err := w.TunnelAddr.WriteTo(buff); err != nil {
+		return err
+	}
+	return nil
+}
+func (w *AgentRegister) WriteTo(I io.Writer) error {
+	if err := WriteU64(I, w.AccountID); err != nil {
+		return err
+	} else if err := WriteU64(I, w.AgentId); err != nil {
+		return err
+	} else if err := WriteU64(I, w.AgentVersion); err != nil {
+		return err
+	} else if err := WriteU64(I, w.Timestamp); err != nil {
+		return err
+	} else if err := w.ClientAddr.WriteTo(I); err != nil {
+		return err
+	} else if err := w.TunnelAddr.WriteTo(I); err != nil {
+		return err
+	} else if err := binary.Write(I, binary.BigEndian, w.Signature); err != nil {
+		return err
+	}
+	return nil
+}
+func (w *AgentRegister) ReadFrom(I io.Reader) error {
+	w.AccountID = ReadU64(I)
+	w.AgentId = ReadU64(I)
+	w.AgentVersion = ReadU64(I)
+	w.Timestamp = ReadU64(I)
+	w.ClientAddr, w.TunnelAddr = AddressPort{}, AddressPort{}
+	if err := w.ClientAddr.ReadFrom(I); err != nil {
+		return err
+	} else if err := w.TunnelAddr.ReadFrom(I); err != nil {
+		return err
+	}
+	w.Signature = make([]byte, 32)
+	if err := ReadBuff(I, w.Signature); err != nil {
+		return err
+	}
+	return nil
+}
 
-type AgentCheckPortMapping struct{}
+type AgentCheckPortMapping struct {
+	AgentSessionId AgentSessionId
+	PortRange      PortRange
+}
 
-func (w *AgentCheckPortMapping) WriteTo(I io.Writer) error  { return nil }
-func (w *AgentCheckPortMapping) ReadFrom(I io.Reader) error { return nil }
+func (w *AgentCheckPortMapping) WriteTo(I io.Writer) error {
+	if err := w.AgentSessionId.WriteTo(I); err != nil {
+		return err
+	} else if err := w.PortRange.WriteTo(I); err != nil {
+		return err
+	}
+	return nil
+}
+func (w *AgentCheckPortMapping) ReadFrom(I io.Reader) error {
+	w.AgentSessionId, w.PortRange = AgentSessionId{}, PortRange{}
+	if err := w.AgentSessionId.ReadFrom(I); err != nil {
+		return err
+	} else if err := w.PortRange.ReadFrom(I); err != nil {
+		return err
+	}
+	return nil
+}
 
 type ControlRequest struct {
+	MessageEncoding
 	Ping                  *Ping
 	AgentRegister         *AgentRegister
 	AgentKeepAlive        *AgentSessionId
@@ -159,20 +233,100 @@ func (w *ControlRequest) ReadFrom(I io.Reader) error {
 	return fmt.Errorf("invalid ControlRequest id")
 }
 
-type AgentRegistered struct{}
+type AgentRegistered struct {
+	ID        AgentSessionId
+	ExpiresAt uint64
+}
 
-func (w *AgentRegistered) WriteTo(I io.Writer) error  { return nil }
-func (w *AgentRegistered) ReadFrom(I io.Reader) error { return nil }
+func (w *AgentRegistered) WriteTo(I io.Writer) error {
+	if err := w.ID.WriteTo(I); err != nil {
+		return err
+	} else if err := WriteU64(I, w.ExpiresAt); err != nil {
+		return err
+	}
+	return nil
+}
+func (w *AgentRegistered) ReadFrom(I io.Reader) error {
+	w.ID = AgentSessionId{}
+	if err := w.ID.ReadFrom(I); err != nil {
+		return err
+	}
+	w.ExpiresAt = ReadU64(I)
+	return nil
+}
 
-type AgentPortMapping struct{}
+type AgentPortMappingFound struct {
+	MessageEncoding
+	ToAgent *AgentSessionId
+}
 
-func (w *AgentPortMapping) WriteTo(I io.Writer) error  { return nil }
-func (w *AgentPortMapping) ReadFrom(I io.Reader) error { return nil }
+func (agentPort *AgentPortMappingFound) WriteTo(I io.Writer) error {
+	if agentPort.ToAgent != nil {
+		if err := WriteU32(I, 1); err != nil {
+			return err
+		} else if err := agentPort.ToAgent.WriteTo(I); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (agentPort *AgentPortMappingFound) ReadFrom(I io.Reader) error {
+	if ReadU32(I) == 1 {
+		agentPort.ToAgent = &AgentSessionId{}
+		return agentPort.ToAgent.ReadFrom(I)
+	}
+	return fmt.Errorf("unknown AgentPortMappingFound id")
+}
 
-type UdpChannelDetails struct{}
+type AgentPortMapping struct {
+	Range PortRange
+	Found *AgentPortMappingFound
+}
 
-func (w *UdpChannelDetails) WriteTo(I io.Writer) error  { return nil }
-func (w *UdpChannelDetails) ReadFrom(I io.Reader) error { return nil }
+func (w *AgentPortMapping) WriteTo(I io.Writer) error {
+	if err := w.Range.WriteTo(I); err != nil {
+		return err
+	} else if err := w.Found.WriteTo(I); err != nil {
+		return err
+	}
+	return nil
+}
+func (w *AgentPortMapping) ReadFrom(I io.Reader) error {
+	if err := w.Range.ReadFrom(I); err != nil {
+		return err
+	} else if err := w.Found.ReadFrom(I); err != nil {
+		return err
+	}
+	return nil
+}
+
+type UdpChannelDetails struct {
+	MessageEncoding
+	TunnelAddr AddressPort
+	Token      []byte
+}
+
+func (w *UdpChannelDetails) WriteTo(I io.Writer) error {
+	if err := w.TunnelAddr.WriteTo(I); err != nil {
+		return err
+	} else if err := WriteU64(I, uint64(len(w.Token))); err != nil {
+		return err
+	} else if err := binary.Write(I, binary.BigEndian, w.Token); err != nil {
+		return err
+	}
+	return nil
+}
+func (w *UdpChannelDetails) ReadFrom(I io.Reader) error {
+	w.TunnelAddr = AddressPort{}
+	if err := w.TunnelAddr.ReadFrom(I); err != nil {
+		return err
+	}
+	w.Token = make([]byte, ReadU64(I))
+	if err := ReadBuff(I, w.Token); err != nil {
+		return err
+	}
+	return nil
+}
 
 type ControlResponse struct {
 	Pong              *Pong
@@ -236,12 +390,16 @@ func (w *ControlResponse) ReadFrom(I io.Reader) error {
 		return w.Pong.ReadFrom(I)
 	case 2:
 		w.InvalidSignature = true
+		return nil
 	case 3:
 		w.Unauthorized = true
+		return nil
 	case 4:
 		w.RequestQueued = true
+		return nil
 	case 5:
 		w.TryAgainLater = true
+		return nil
 	case 6:
 		w.AgentRegistered = &AgentRegistered{}
 		return w.AgentRegistered.ReadFrom(I)
