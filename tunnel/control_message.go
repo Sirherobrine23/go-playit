@@ -329,11 +329,11 @@ func (w *UdpChannelDetails) ReadFrom(I io.Reader) error {
 }
 
 type ControlResponse struct {
-	Pong              *Pong
 	InvalidSignature  bool
 	Unauthorized      bool
 	RequestQueued     bool
 	TryAgainLater     bool
+	Pong              *Pong
 	AgentRegistered   *AgentRegistered
 	AgentPortMapping  *AgentPortMapping
 	UdpChannelDetails *UdpChannelDetails

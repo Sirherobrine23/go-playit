@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bytes"
+	"net"
 	"time"
 
 	"sirherobrine23.org/playit-cloud/go-playit/api"
@@ -13,7 +14,7 @@ type AuthenticatedControl struct {
 	CurrentPing *uint32
 	LastPong    Pong
 	ForceEpired bool
-	Registered    AgentRegistered
+	Registered  AgentRegistered
 	Buff        []byte
 }
 
@@ -21,7 +22,7 @@ func (Auth *AuthenticatedControl) Send(Req ControlRpcMessage[MessageEncoding]) e
 	Auth.Buff = []byte{}
 	if err := Req.WriteTo(bytes.NewBuffer(Auth.Buff)); err != nil {
 		return err
-	} else if _, err := Auth.Conn.Udp.Write(Auth.Buff); err != nil {
+	} else if _, err := Auth.Conn.Udp.WriteTo(Auth.Buff, net.UDPAddrFromAddrPort(Auth.Conn.ControlAddr)); err != nil {
 		return err
 	}
 	return nil
@@ -59,7 +60,7 @@ func (Auth *AuthenticatedControl) SendPing(RequestID uint64, Now time.Time) erro
 }
 
 func (Auth *AuthenticatedControl) FlowChanged() bool {
-	return Auth.LastPong.ClientAddr.Compare(Auth.LastPong.ClientAddr.AddrPort) == 0
+	return Auth.LastPong.ClientAddr.Compare(Auth.LastPong.ClientAddr.AddrPort) != 0
 }
 
 func (Auth *AuthenticatedControl) IsIspired() bool {
@@ -69,8 +70,8 @@ func (Auth *AuthenticatedControl) IsIspired() bool {
 func (Auth *AuthenticatedControl) IntoRequiresAuth() *ConnectedControl {
 	return &ConnectedControl{
 		ControlAddr: Auth.Conn.ControlAddr,
-		Udp: Auth.Conn.Udp,
-		Pong: Auth.LastPong,
+		Udp:         Auth.Conn.Udp,
+		Pong:        &Auth.LastPong,
 	}
 }
 
@@ -105,8 +106,8 @@ func (Auth *AuthenticatedControl) RecFeedMsg() (*ControlFeed, error) {
 func (Auth *AuthenticatedControl) Authenticate() (*AuthenticatedControl, error) {
 	conn := ConnectedControl{
 		ControlAddr: Auth.Conn.ControlAddr,
-		Udp: Auth.Conn.Udp,
-		Pong: Auth.LastPong,
+		Udp:         Auth.Conn.Udp,
+		Pong:        &Auth.LastPong,
 	}
 	return conn.Authenticate(Auth.ApiClient)
 }

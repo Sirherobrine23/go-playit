@@ -1,9 +1,7 @@
 package tunnel
 
 import (
-	"bytes"
 	"fmt"
-	"net"
 	"net/netip"
 	"slices"
 	"time"
@@ -15,7 +13,7 @@ type SimplesTunnel struct {
 	ApiClaim           api.Api
 	ControlAddr        netip.AddrPort
 	ControlChannel     *AuthenticatedControl
-	UdpTunnel          UdpTunnel
+	UdpTunnel          *UdpTunnel
 	LastKeepAlive      uint64
 	LastPing           uint64
 	LastPong           uint64
@@ -23,89 +21,43 @@ type SimplesTunnel struct {
 	lastControlTargets []netip.AddrPort
 }
 
+func ControlAddresses(Api api.Api) ([]netip.AddrPort, error) {
+	controls, err := Api.AgentRoutings(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	addrs := []netip.AddrPort{}
+	for _, v := range append(controls.Targets6, controls.Targets4...) {
+		addrs = append(addrs, netip.AddrPortFrom(v, 5525))
+	}
+	return addrs, nil
+}
+
 func (Tun *SimplesTunnel) Setup() error {
-	controls, err := Tun.ApiClaim.AgentRoutings(nil)
+	var err error
+	Tun.UdpTunnel, err = NewUdpTunnel()
 	if err != nil {
 		return err
 	}
 
-	Tun.lastControlTargets = []netip.AddrPort{}
-	for _, v := range append(controls.Targets6, controls.Targets4...) {
-		Tun.lastControlTargets = append(Tun.lastControlTargets, netip.AddrPortFrom(v, 5525))
-	}
-
-	for _, Addr := range Tun.lastControlTargets {
-		Tun.ControlAddr = Addr
-		conn, err := net.Dial("udp", Tun.ControlAddr.String())
-		if err != nil {
-			continue
-		}
-
-		// Make initial ping
-		buffer := bytes.NewBuffer([]byte{})
-		err = (&ControlRpcMessage[*ControlRequest]{
-			RequestID: 1,
-			Content: &ControlRequest{
-				Ping: &Ping{
-					Now:         time.Now(),
-					CurrentPing: nil,
-					SessionID:   nil,
-				},
-			},
-		}).WriteTo(buffer)
-		if err != nil {
-			conn.Close()
-			return err
-		}
-
-		// Write initial ping
-		_, err = buffer.WriteTo(conn)
-		if err != nil {
-			conn.Close()
-			return err
-		}
-
-		// Get response from ping
-		buffer.Reset()
-		conn.SetReadDeadline(time.Now().Add(time.Second * 5))
-		bytesRead := make([]byte, 2048)
-		_, err = conn.Read(bytesRead)
-		if err != nil {
-			conn.Close()
-			return err
-		}
-
-		// Parse reponse pong
-		reader := bytes.NewReader(bytesRead)
-		res := ControlFeed{}
-		if err := res.ReadFrom(reader); err != nil {
-			conn.Close()
-			return err
-		} else if res.Response == nil || res.Response.RequestID != 1 {
-			conn.Close()
-			return fmt.Errorf("got response with unexpected request_id")
-		} else if res.Response == nil {
-			conn.Close()
-			return fmt.Errorf("expected controlRequest")
-		}
-
-		Response := res.Response.Content
-		if Response.Pong == nil {
-			conn.Close()
-			return fmt.Errorf("expected pong got other response")
-		}
-
-		connControl := ConnectedControl{
-			ControlAddr: Tun.ControlAddr,
-			Udp:         conn,
-			Pong:        *Response.Pong,
-		}
-
-		Tun.ControlChannel, err = connControl.Authenticate(Tun.ApiClaim)
+	addresses, err := ControlAddresses(Tun.ApiClaim)
+	if err != nil {
 		return err
 	}
 
-	return fmt.Errorf("cannot make UDP tunnel to playit controller, check you internet conenction")
+	setup, err := (&SetupFindSuitableChannel{Address: addresses}).Setup()
+	if err != nil {
+		return err
+	}
+
+	control_channel, err := setup.Authenticate(Tun.ApiClaim)
+	if err != nil {
+		return err
+	}
+	Tun.ControlAddr = setup.ControlAddr
+	Tun.ControlChannel = control_channel
+	return nil
 }
 
 func (Tun *SimplesTunnel) ReloadControlAddr() (bool, error) {
@@ -141,7 +93,6 @@ func (Tun *SimplesTunnel) ReloadControlAddr() (bool, error) {
 }
 
 func (Tun *SimplesTunnel) UpdateControlAddr(conncted ConnectedControl) (ok bool, err error) {
-	ok = false
 	if conncted.ControlAddr.Compare(Tun.ControlAddr) == 0 {
 		return
 	}
@@ -160,12 +111,13 @@ func (Tun *SimplesTunnel) UpdateControlAddr(conncted ConnectedControl) (ok bool,
 	return
 }
 
-func (Tun *SimplesTunnel) Update() *NewClient {
+func (Tun *SimplesTunnel) Update() (*NewClient, error) {
 	if Tun.ControlChannel.IsIspired() {
+		fmt.Println("Creating new controller channel...")
 		newControlChannel, err := Tun.ControlChannel.Authenticate()
 		if err != nil {
 			time.Sleep(time.Second * 2)
-			return nil
+			return nil, err
 		}
 		Tun.ControlChannel = newControlChannel
 	}
@@ -174,7 +126,7 @@ func (Tun *SimplesTunnel) Update() *NewClient {
 	if now-Tun.LastPing > 1_000 {
 		Tun.LastPing = uint64(now)
 		if err := Tun.ControlChannel.SendPing(200, time.UnixMilli(int64(now))); err != nil {
-			fmt.Println(err)
+			return nil, err
 		}
 	}
 
@@ -189,7 +141,7 @@ func (Tun *SimplesTunnel) Update() *NewClient {
 		if 1_000 < now-Tun.LastUdpAuth {
 			Tun.LastUdpAuth = uint64(now)
 			if _, err := Tun.UdpTunnel.ResendToken(); err != nil {
-				fmt.Println(err)
+				return nil, err
 			}
 		}
 
@@ -202,29 +154,31 @@ func (Tun *SimplesTunnel) Update() *NewClient {
 		if 10_000 < now-Tun.LastKeepAlive && timeTillExpire < 30_000 {
 			Tun.LastKeepAlive = now
 			if err := Tun.ControlChannel.SendKeepAlive(100); err != nil {
-				fmt.Println(err)
+				return nil, err
 			} else if err := Tun.ControlChannel.SendSetupUDPChannel(1); err != nil {
-				fmt.Println(err)
+				return nil, err
 			}
 		}
 
 		timeout := 0
 		for range 30 {
 			if timeout >= 10 {
-				return nil
+				return nil, nil
 			}
+			fmt.Println("RX Feed message")
 			men, err := Tun.ControlChannel.RecFeedMsg()
 			if err != nil {
 				fmt.Println(err)
 				timeout++
 			}
 			if men.NewClient != nil {
-				return men.NewClient
+				return men.NewClient, nil
 			} else if men.Response != nil {
 				cont := men.Response.Content
 				if cont.UdpChannelDetails != nil {
+					fmt.Println("SetUdpTunnel")
 					if err := Tun.UdpTunnel.SetUdpTunnel(*men.Response.Content.UdpChannelDetails); err != nil {
-						panic(err)
+						return nil, err
 					}
 				} else if cont.Pong != nil {
 					Tun.LastPong = uint64(time.Now().UnixMilli())
@@ -232,16 +186,17 @@ func (Tun *SimplesTunnel) Update() *NewClient {
 					// }
 				} else if cont.Unauthorized {
 					Tun.ControlChannel.ForceEpired = true
+					return nil, fmt.Errorf("unauthorized, check token or reload agent")
 				}
 			}
 		}
 	}
 
 	if Tun.LastPong != 0 && uint64(time.Now().UnixMilli())-Tun.LastPong > 6_000 {
-		// fmt.Println("timeout waiting for pong")
+		fmt.Println("timeout waiting for pong")
 		Tun.LastPong = 0
 		Tun.ControlChannel.ForceEpired = true
 	}
 
-	return nil
+	return nil, nil
 }

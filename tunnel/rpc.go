@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 )
 
@@ -23,5 +25,9 @@ func (w *ControlRpcMessage[T]) WriteTo(I io.Writer) error {
 
 func (w *ControlRpcMessage[T]) ReadFrom(I io.Reader) error {
 	w.RequestID = ReadU64(I)
+	defer func(){
+		d, _ := json.MarshalIndent(w, "", "  ")
+		fmt.Println(string(d))
+	}()
 	return w.Content.ReadFrom(I)
 }

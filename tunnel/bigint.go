@@ -60,6 +60,10 @@ func WriteU64(w io.Writer, value uint64) error {
 	return binary.Write(w, binary.BigEndian, value)
 }
 
+func WriteData(w io.Writer, val any) error {
+	return binary.Write(w, binary.BigEndian, val)
+}
+
 func ReadBuff(w io.Reader, buff []byte) error {
 	for index := range buff {
 		if err := binary.Read(w, binary.BigEndian, &buff[index]); err != nil {
