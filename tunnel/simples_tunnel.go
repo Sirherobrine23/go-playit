@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -13,7 +14,7 @@ type SimplesTunnel struct {
 	ApiClaim           api.Api
 	ControlAddr        netip.AddrPort
 	ControlChannel     *AuthenticatedControl
-	UdpTunnel          *UdpTunnel
+	UdpTunnel          UdpTunnel
 	LastKeepAlive      uint64
 	LastPing           uint64
 	LastPong           uint64
@@ -35,9 +36,7 @@ func ControlAddresses(Api api.Api) ([]netip.AddrPort, error) {
 }
 
 func (Tun *SimplesTunnel) Setup() error {
-	var err error
-	Tun.UdpTunnel, err = NewUdpTunnel()
-	if err != nil {
+	if err := AssignUdpTunnel(&Tun.UdpTunnel); err != nil {
 		return err
 	}
 
@@ -61,46 +60,40 @@ func (Tun *SimplesTunnel) Setup() error {
 }
 
 func (Tun *SimplesTunnel) ReloadControlAddr() (bool, error) {
-	routs, err := Tun.ApiClaim.AgentRoutings(nil)
+	addresses, err := ControlAddresses(Tun.ApiClaim)
 	if err != nil {
 		return false, err
 	}
-	addresses := []netip.AddrPort{}
-	for _, v := range append(routs.Targets6, routs.Targets4...) {
-		addresses = append(addresses, netip.AddrPortFrom(v, 5525))
-	}
-	skip := true
-	for _, addr := range addresses {
-		if !slices.Contains(Tun.lastControlTargets, addr) {
-			skip = false
-		}
-	}
-	if skip {
+
+	if slices.ContainsFunc(Tun.lastControlTargets, func(a netip.AddrPort) bool {
+		return !slices.ContainsFunc(addresses, func(b netip.AddrPort) bool {
+			return a.Compare(b) == 0
+		})
+	}) {
 		return false, nil
 	}
-	tun2 := SimplesTunnel{
-		ApiClaim: Tun.ApiClaim,
-	}
-	if err := tun2.Setup(); err != nil {
+	setup, err := (&SetupFindSuitableChannel{addresses}).Setup()
+	if err != nil {
 		return false, err
 	}
-	updated, err := Tun.UpdateControlAddr(tun2.ControlChannel.Conn)
-	if err != nil {
-		return updated, err
-	}
+	updated, err := Tun.UpdateControlAddr(*setup)
 	Tun.lastControlTargets = addresses
-	return false, nil
+	return updated, err
 }
 
 func (Tun *SimplesTunnel) UpdateControlAddr(conncted ConnectedControl) (ok bool, err error) {
 	if conncted.ControlAddr.Compare(Tun.ControlAddr) == 0 {
+		LogDebug.Println("not required Update control addr")
 		return
 	}
+
 	var controlChannel *AuthenticatedControl
 	controlChannel, err = conncted.Authenticate(Tun.ApiClaim)
 	if err != nil {
 		return
 	}
+	LogDebug.Printf("Update control address %s to %s\n", Tun.ControlAddr.String(), conncted.ControlAddr.String())
+
 	Tun.ControlChannel = controlChannel
 	Tun.ControlAddr = conncted.ControlAddr
 	Tun.LastPing = 0
@@ -113,35 +106,39 @@ func (Tun *SimplesTunnel) UpdateControlAddr(conncted ConnectedControl) (ok bool,
 
 func (Tun *SimplesTunnel) Update() (*NewClient, error) {
 	if Tun.ControlChannel.IsIspired() {
-		fmt.Println("Creating new controller channel...")
-		newControlChannel, err := Tun.ControlChannel.Authenticate()
-		if err != nil {
+		LogDebug.Println("Creating new controller channel...")
+		if err := Tun.ControlChannel.Authenticate(); err != nil {
+			LogDebug.Println(err)
 			time.Sleep(time.Second * 2)
-			return nil, err
+			return nil, nil
 		}
-		Tun.ControlChannel = newControlChannel
 	}
 
 	now := uint64(time.Now().UnixMilli())
 	if now-Tun.LastPing > 1_000 {
-		Tun.LastPing = uint64(now)
+		Tun.LastPing = now
 		if err := Tun.ControlChannel.SendPing(200, time.UnixMilli(int64(now))); err != nil {
-			return nil, err
+			LogDebug.Println("failed to send ping")
 		}
 	}
 
+	// d, _ := json.MarshalIndent(Tun, "", "  ")
+	// LogDebug.Panicf(string(d))
+
 	if Tun.UdpTunnel.RequiresAuth() {
 		if 5_000 < now-Tun.LastUdpAuth {
-			Tun.LastUdpAuth = uint64(now)
+			Tun.LastUdpAuth = now
 			if err := Tun.ControlChannel.SendSetupUDPChannel(9000); err != nil {
-				fmt.Println(err)
+				LogDebug.Println("failed to send udp setup request to control")
+				LogDebug.Println(err)
 			}
 		}
 	} else if Tun.UdpTunnel.RequireResend() {
 		if 1_000 < now-Tun.LastUdpAuth {
-			Tun.LastUdpAuth = uint64(now)
+			Tun.LastUdpAuth = now
 			if _, err := Tun.UdpTunnel.ResendToken(); err != nil {
-				return nil, err
+				LogDebug.Println("failed to send udp auth request")
+				LogDebug.Println(err)
 			}
 		}
 
@@ -150,50 +147,64 @@ func (Tun *SimplesTunnel) Update() (*NewClient, error) {
 				return y
 			}
 			return x
-		}(Tun.ControlChannel.Registered.ExpiresAt, uint64(now))
+		}(uint64(Tun.ControlChannel.Registered.ExpiresAt.UnixMilli()), uint64(now))
 		if 10_000 < now-Tun.LastKeepAlive && timeTillExpire < 30_000 {
 			Tun.LastKeepAlive = now
+			LogDebug.Println("send KeepAlive")
 			if err := Tun.ControlChannel.SendKeepAlive(100); err != nil {
-				return nil, err
-			} else if err := Tun.ControlChannel.SendSetupUDPChannel(1); err != nil {
-				return nil, err
+				LogDebug.Println("failed to send KeepAlive")
+				LogDebug.Println(err)
+			}
+			if err := Tun.ControlChannel.SendSetupUDPChannel(1); err != nil {
+				LogDebug.Println("failed to send setup udp channel request")
+				LogDebug.Println(err)
 			}
 		}
 
 		timeout := 0
 		for range 30 {
 			if timeout >= 10 {
-				return nil, nil
+				LogDebug.Println("feed recv timeout")
+				break
 			}
-			fmt.Println("RX Feed message")
+			LogDebug.Println("RX Feed message")
 			men, err := Tun.ControlChannel.RecFeedMsg()
 			if err != nil {
-				fmt.Println(err)
 				timeout++
+				LogDebug.Printf("failed to parse response: %s\n", err.Error())
+				continue
 			}
+
 			if men.NewClient != nil {
 				return men.NewClient, nil
 			} else if men.Response != nil {
 				cont := men.Response.Content
 				if cont.UdpChannelDetails != nil {
-					fmt.Println("SetUdpTunnel")
+					LogDebug.Print("Response SetUdpTunnel")
 					if err := Tun.UdpTunnel.SetUdpTunnel(*men.Response.Content.UdpChannelDetails); err != nil {
-						return nil, err
+						timeout++
+						LogDebug.Print(err)
 					}
 				} else if cont.Pong != nil {
 					Tun.LastPong = uint64(time.Now().UnixMilli())
-					// if cont.Pong.ClientAddr.Compare(Tun.ControlChannel.Conn.Pong.ClientAddr.AddrPort) != 0 {
-					// }
+					if cont.Pong.ClientAddr.Compare(Tun.ControlChannel.Conn.Pong.ClientAddr.AddrPort) != 0 {
+						LogDebug.Printf("Client IP changed: %q -> %q\n", cont.Pong.ClientAddr, Tun.ControlChannel.Conn.Pong.ClientAddr.AddrPort)
+					}
 				} else if cont.Unauthorized {
+					LogDebug.Panicln("unauthorized, check token or reload agent")
 					Tun.ControlChannel.ForceEpired = true
 					return nil, fmt.Errorf("unauthorized, check token or reload agent")
+				} else {
+					LogDebug.Printf("got response")
+					d , _ := json.MarshalIndent(men, "", "  ")
+					LogDebug.Printf(string(d))
 				}
 			}
 		}
 	}
 
 	if Tun.LastPong != 0 && uint64(time.Now().UnixMilli())-Tun.LastPong > 6_000 {
-		fmt.Println("timeout waiting for pong")
+		LogDebug.Println("timeout waiting for pong")
 		Tun.LastPong = 0
 		Tun.ControlChannel.ForceEpired = true
 	}

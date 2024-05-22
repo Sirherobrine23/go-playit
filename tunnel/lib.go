@@ -8,7 +8,6 @@ import (
 )
 
 type PortProto struct {
-	MessageEncoding
 	// 1 => "tcp"
 	//
 	// 2 => "udp"
@@ -41,7 +40,6 @@ func (w *PortProto) ReadFrom(I io.Reader) error {
 }
 
 type AgentSessionId struct {
-	MessageEncoding
 	SessionID, AccountID, AgentID uint64
 }
 
@@ -63,7 +61,6 @@ func (w *AgentSessionId) ReadFrom(I io.Reader) error {
 }
 
 type PortRange struct {
-	MessageEncoding
 	IP        net.IP
 	PortStart uint16
 	PortEnd   uint16

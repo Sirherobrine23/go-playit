@@ -175,7 +175,6 @@ func (w *AgentCheckPortMapping) ReadFrom(I io.Reader) error {
 }
 
 type ControlRequest struct {
-	MessageEncoding
 	Ping                  *Ping
 	AgentRegister         *AgentRegister
 	AgentKeepAlive        *AgentSessionId
@@ -235,13 +234,13 @@ func (w *ControlRequest) ReadFrom(I io.Reader) error {
 
 type AgentRegistered struct {
 	ID        AgentSessionId
-	ExpiresAt uint64
+	ExpiresAt time.Time
 }
 
 func (w *AgentRegistered) WriteTo(I io.Writer) error {
 	if err := w.ID.WriteTo(I); err != nil {
 		return err
-	} else if err := WriteU64(I, w.ExpiresAt); err != nil {
+	} else if err := WriteU64(I, uint64(w.ExpiresAt.UnixMilli())); err != nil {
 		return err
 	}
 	return nil
@@ -251,12 +250,11 @@ func (w *AgentRegistered) ReadFrom(I io.Reader) error {
 	if err := w.ID.ReadFrom(I); err != nil {
 		return err
 	}
-	w.ExpiresAt = ReadU64(I)
+	w.ExpiresAt = time.UnixMilli(int64(ReadU64(I)))
 	return nil
 }
 
 type AgentPortMappingFound struct {
-	MessageEncoding
 	ToAgent *AgentSessionId
 }
 
@@ -301,7 +299,6 @@ func (w *AgentPortMapping) ReadFrom(I io.Reader) error {
 }
 
 type UdpChannelDetails struct {
-	MessageEncoding
 	TunnelAddr AddressPort
 	Token      []byte
 }
@@ -381,7 +378,7 @@ func (w *ControlResponse) WriteTo(I io.Writer) error {
 		}
 		return w.UdpChannelDetails.WriteTo(I)
 	}
-	return nil
+	return fmt.Errorf("set one option to write")
 }
 func (w *ControlResponse) ReadFrom(I io.Reader) error {
 	switch ReadU32(I) {

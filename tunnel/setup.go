@@ -17,20 +17,13 @@ type SetupFindSuitableChannel struct {
 
 func (Setup *SetupFindSuitableChannel) Setup() (*ConnectedControl, error) {
 	for _, Addr := range Setup.Address {
-		if !Addr.IsValid() {
-			continue
-		}
-		var (
-			conn *net.UDPConn
-			err error
-		)
-
+		network := "udp6"
 		if Addr.Addr().Is4() && !Addr.Addr().Is4In6() {
-			conn, err = net.ListenUDP("udp4", nil)
-		} else {
-			conn, err = net.ListenUDP("udp6", nil)
+			network = "udp4"
 		}
+		conn, err := net.ListenUDP(network, nil)
 		if err != nil {
+			fmt.Println(err.Error())
 			continue
 		}
 
@@ -60,7 +53,7 @@ func (Setup *SetupFindSuitableChannel) Setup() (*ConnectedControl, error) {
 
 			for range 5 {
 				buff := make([]byte, 2048)
-				if err = conn.SetReadDeadline(time.Now().Add(time.Millisecond*5)); err != nil {
+				if err = conn.SetReadDeadline(time.Now().Add(time.Millisecond * 5)); err != nil {
 					return nil, err
 				}
 				bytesSize, peer, err := conn.ReadFrom(buff)
@@ -114,8 +107,10 @@ func (Control *ConnectedControl) Authenticate(Api api.Api) (*AuthenticatedContro
 		return nil, fmt.Errorf("invalid pong Tunnel address")
 	}
 
+	LogDebug.Println("Registring agent proto")
 	tk, err := Api.ProtoRegisterRegister(Control.Pong.ClientAddr.AddrPort, Control.Pong.TunnelAddr.AddrPort)
 	if err != nil {
+		LogDebug.Println("failed to sign and register")
 		return nil, err
 	}
 
@@ -134,51 +129,62 @@ func (Control *ConnectedControl) Authenticate(Api api.Api) (*AuthenticatedContro
 		}).WriteTo(buffer); err != nil {
 			return nil, err
 		}
-
 		_, err := Control.Udp.WriteTo(buffer.Bytes(), net.UDPAddrFromAddrPort(Control.ControlAddr))
 		if err != nil {
 			return nil, err
 		}
 
 		for range 5 {
-			reciver := make([]byte, 1024)
+			reciver := append(buffer.Bytes(), make([]byte, 1024)...)
 			Control.Udp.SetReadDeadline(time.Now().Add(time.Millisecond * 5))
-			_, remote, err := Control.Udp.ReadFrom(reciver);
+			recSize, remote, err := Control.Udp.ReadFrom(reciver)
 			if err != nil {
+				if errNet, isNet := err.(net.Error); isNet {
+					if errNet.Timeout() {
+						LogDebug.Println("Timeout")
+						break
+					}
+				}
 				return nil, err
 			} else if remote.String() != Control.ControlAddr.String() {
+				LogDebug.Println("got response not from tunnel server")
 				continue
 			}
 
 			feed := &ControlFeed{}
-			if err = feed.ReadFrom(bytes.NewReader(reciver)); err != nil {
+			if err = feed.ReadFrom(bytes.NewReader(reciver[:recSize])); err != nil {
+				LogDebug.Println("failed to read response from tunnel")
 				return nil, err
-			} else if feed.Response == nil || feed.Response.Content == nil {
-				return nil, fmt.Errorf("cannot get response")
 			} else if feed.Response.RequestID != 10 {
+				LogDebug.Println("got response for different request")
 				continue
+			} else if feed.Response == nil || feed.Response.Content == nil {
+				LogDebug.Println("feed response or Response content is empty")
+				return nil, fmt.Errorf("cannot get response")
 			}
 
 			controlRes := feed.Response.Content
 			if controlRes.RequestQueued {
+				LogDebug.Println("register queued, waiting 1s")
 				time.Sleep(time.Second)
+				continue
 			} else if controlRes.InvalidSignature {
 				return nil, fmt.Errorf("register return invalid signature")
 			} else if controlRes.Unauthorized {
 				return nil, fmt.Errorf("unauthorized")
 			} else if controlRes.AgentRegistered != nil {
-				auth := AuthenticatedControl{
+				return &AuthenticatedControl{
 					ApiClient:   Api,
 					Conn:        *Control,
 					LastPong:    *Control.Pong,
 					CurrentPing: nil,
 					Registered:  *controlRes.AgentRegistered,
-					Buff:        []byte{},
+					Buff:        reciver[recSize:],
 					ForceEpired: false,
-				}
-				return &auth, nil
+				}, nil
 			}
+			LogDebug.Println("expected AgentRegistered but got something else")
 		}
 	}
-	return nil, fmt.Errorf("expected AgentRegistered but got something else")
+	return nil, fmt.Errorf("failed1 to connect agent")
 }

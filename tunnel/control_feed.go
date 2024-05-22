@@ -2,12 +2,12 @@ package tunnel
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 )
 
 type ClaimInstructions struct {
-	MessageEncoding
 	Address AddressPort
 	Token   []byte
 }
@@ -35,7 +35,6 @@ func (w *ClaimInstructions) ReadFrom(I io.Reader) error {
 }
 
 type NewClient struct {
-	MessageEncoding
 	ConnectAddr       AddressPort
 	PeerAddr          AddressPort
 	ClaimInstructions ClaimInstructions
@@ -76,6 +75,10 @@ type ControlFeed struct {
 }
 
 func (w *ControlFeed) WriteTo(I io.Writer) error {
+	defer func(){
+		d, _ := json.MarshalIndent(w, "", "  ")
+		LogDebug.Printf("Write Feed: %s\n", string(d))
+	}()
 	if w.Response != nil {
 		if err := WriteU32(I, 1); err != nil {
 			return err
@@ -90,6 +93,10 @@ func (w *ControlFeed) WriteTo(I io.Writer) error {
 	return fmt.Errorf("set ResponseControl or NewClient")
 }
 func (w *ControlFeed) ReadFrom(I io.Reader) error {
+	defer func(){
+		d, _ := json.MarshalIndent(w, "", "  ")
+		LogDebug.Printf("Read Feed: %s\n", string(d))
+	}()
 	switch ReadU32(I) {
 	case 1:
 		w.Response = &ControlRpcMessage[*ControlResponse]{}

@@ -2,7 +2,8 @@ package tunnel
 
 import (
 	"bytes"
-	"net"
+	"fmt"
+	"net/netip"
 	"time"
 
 	"sirherobrine23.org/playit-cloud/go-playit/api"
@@ -20,9 +21,13 @@ type AuthenticatedControl struct {
 
 func (Auth *AuthenticatedControl) Send(Req ControlRpcMessage[MessageEncoding]) error {
 	Auth.Buff = []byte{}
-	if err := Req.WriteTo(bytes.NewBuffer(Auth.Buff)); err != nil {
+	bufio := bytes.NewBuffer(Auth.Buff)
+	if err := Req.WriteTo(bufio); err != nil {
 		return err
-	} else if _, err := Auth.Conn.Udp.WriteTo(Auth.Buff, net.UDPAddrFromAddrPort(Auth.Conn.ControlAddr)); err != nil {
+	}
+	Auth.Buff = bufio.Bytes()
+	_, err := Auth.Conn.Udp.WriteToUDPAddrPort(Auth.Buff, Auth.Conn.ControlAddr)
+	if err != nil {
 		return err
 	}
 	return nil
@@ -75,26 +80,41 @@ func (Auth *AuthenticatedControl) IntoRequiresAuth() *ConnectedControl {
 	}
 }
 
+type InvalidRemote struct {
+	Expected, Got netip.AddrPort
+}
+
+func (a InvalidRemote) Error() string {
+	return fmt.Sprintf("expected %s, got %s", a.Expected.String(), a.Got.String())
+}
+
 func (Auth *AuthenticatedControl) RecFeedMsg() (*ControlFeed, error) {
-	Auth.Buff = make([]byte, 1024)
-	if _, err := Auth.Conn.Udp.Read(Auth.Buff); err != nil {
+	Auth.Buff = append(Auth.Buff, make([]byte, 1024)...)
+	size, remote, err := Auth.Conn.Udp.ReadFromUDP(Auth.Buff)
+	LogDebug.Println(size, remote, err)
+	if err != nil {
 		return nil, err
+	} else if remote.AddrPort().Compare(Auth.Conn.ControlAddr) != 0 {
+		return nil, InvalidRemote{Expected: Auth.Conn.ControlAddr, Got: remote.AddrPort()}
 	}
+
 	var feed ControlFeed
-	if err := feed.ReadFrom(bytes.NewBuffer(Auth.Buff)); err != nil {
+	if err := feed.ReadFrom(bytes.NewBuffer(Auth.Buff[size:])); err != nil {
 		return nil, err
 	}
 
 	if feed.Response != nil {
 		if feed.Response.Content != nil {
 			if feed.Response.Content.AgentRegistered != nil {
+				LogDebug.Println("agent registred")
+				LogDebug.Printf("%+v\n", feed.Response.Content.AgentRegistered)
 				Auth.Registered = *feed.Response.Content.AgentRegistered
 			} else if feed.Response.Content.Pong != nil {
 				CurrentPing := uint32(feed.Response.Content.Pong.RequestNow - uint64(time.Now().UnixMilli()))
 				Auth.CurrentPing = &CurrentPing
 				Auth.LastPong = *feed.Response.Content.Pong
 				if feed.Response.Content.Pong.SessionExpireAt != nil {
-					Auth.Registered.ExpiresAt = *feed.Response.Content.Pong.SessionExpireAt
+					Auth.Registered.ExpiresAt = time.UnixMilli(int64(*feed.Response.Content.Pong.SessionExpireAt))
 				}
 			}
 		}
@@ -103,11 +123,19 @@ func (Auth *AuthenticatedControl) RecFeedMsg() (*ControlFeed, error) {
 	return &feed, nil
 }
 
-func (Auth *AuthenticatedControl) Authenticate() (*AuthenticatedControl, error) {
-	conn := ConnectedControl{
+func (Auth *AuthenticatedControl) Authenticate() error {
+	conn, err := (&ConnectedControl{
 		ControlAddr: Auth.Conn.ControlAddr,
 		Udp:         Auth.Conn.Udp,
 		Pong:        &Auth.LastPong,
+	}).Authenticate(Auth.ApiClient)
+	if err != nil {
+		return err
 	}
-	return conn.Authenticate(Auth.ApiClient)
+	Auth.Buff = conn.Buff
+	Auth.Conn = conn.Conn
+	Auth.CurrentPing = conn.CurrentPing
+	Auth.LastPong = conn.LastPong
+	Auth.Registered = conn.Registered
+	return nil
 }

@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 )
 
@@ -20,14 +19,18 @@ func (w *ControlRpcMessage[T]) WriteTo(I io.Writer) error {
 	if err := WriteU64(I, w.RequestID); err != nil {
 		return err
 	}
+	defer func() {
+		d, _ := json.MarshalIndent(w, "", "  ")
+		LogDebug.Printf("Write RPC: %s\n", string(d))
+	}()
 	return w.Content.WriteTo(I)
 }
 
 func (w *ControlRpcMessage[T]) ReadFrom(I io.Reader) error {
 	w.RequestID = ReadU64(I)
-	defer func(){
+	defer func() {
 		d, _ := json.MarshalIndent(w, "", "  ")
-		fmt.Println(string(d))
+		LogDebug.Printf("Read RPC: %s\n", string(d))
 	}()
 	return w.Content.ReadFrom(I)
 }
