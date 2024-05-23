@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	ClaimAgents     []string = []string{
+	ClaimAgents []string = []string{
 		"default", "assignable", "self-managed",
 	}
 )

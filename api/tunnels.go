@@ -54,23 +54,26 @@ type UseAllocPortAlloc struct {
 type UseRegion struct {
 	Region string `json:"region"`
 }
-/**
+
+/*
+*
 "status": "allocated",
-"data": {
-	"assigned_domain": "going-scales.gl.at.ply.gg",
-	"assigned_srv": null,
-	"assignment": {
-		"type": "shared-ip"
-	},
-	"id": "f667b538-0294-4817-9332-5cba5e94d79e",
-	"ip_hostname": "19.ip.gl.ply.gg",
-	"ip_type": "both",
-	"port_end": 49913,
-	"port_start": 49912,
-	"region": "global",
-	"static_ip4": "147.185.221.19",
-	"tunnel_ip": "2602:fbaf:0:1::13"
-}
+
+	"data": {
+		"assigned_domain": "going-scales.gl.at.ply.gg",
+		"assigned_srv": null,
+		"assignment": {
+			"type": "shared-ip"
+		},
+		"id": "f667b538-0294-4817-9332-5cba5e94d79e",
+		"ip_hostname": "19.ip.gl.ply.gg",
+		"ip_type": "both",
+		"port_end": 49913,
+		"port_start": 49912,
+		"region": "global",
+		"static_ip4": "147.185.221.19",
+		"tunnel_ip": "2602:fbaf:0:1::13"
+	}
 */
 type TunnelCreateUseAllocation struct {
 	Status string `json:"status"`  // For tunnel list
@@ -99,7 +102,7 @@ type Tunnel struct {
 	ID         *uuid.UUID                 `json:"tunnel_id,omitempty"`   // Tunnel UUID
 	Name       string                     `json:"name,omitempty"`        // Tunnel name
 	TunnelType string                     `json:"tunnel_type,omitempty"` // Tunnel type from TunnelType const's
-	PortType   string                     `json:"port_type"`             // tcp, udp or both
+	PortType   PortProto                  `json:"port_type"`             // tcp, udp or both
 	PortCount  uint16                     `json:"port_count"`            // Port count to assign to connect
 	Origin     TunnelOriginCreate         `json:"origin"`
 	Enabled    bool                       `json:"enabled"`
@@ -167,14 +170,14 @@ func (w *Api) DeleteTunnel(TunnelID *uuid.UUID) error {
 }
 
 type AccountTunnel struct {
-	ID         uuid.UUID          `json:"id"`
-	TunnelType string             `json:"tunnel_type"`
-	CreatedAt  time.Time          `json:"created_at"`
-	Name       string             `json:"name"`
-	PortType   string             `json:"port_type"`
-	PortCount  int32              `json:"port_count"`
-	Alloc      TunnelCreateUseAllocation                `json:"alloc"`
-	Origin     TunnelOriginCreate `json:"origin"`
+	ID         uuid.UUID                 `json:"id"`
+	TunnelType string                    `json:"tunnel_type"`
+	CreatedAt  time.Time                 `json:"created_at"`
+	Name       string                    `json:"name"`
+	PortType   PortProto                 `json:"port_type"`
+	PortCount  int32                     `json:"port_count"`
+	Alloc      TunnelCreateUseAllocation `json:"alloc"`
+	Origin     TunnelOriginCreate        `json:"origin"`
 	Domain     *struct {
 		ID         uuid.UUID `json:"id"`
 		Name       string    `json:"name"`

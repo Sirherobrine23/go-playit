@@ -1,7 +1,12 @@
 package api
 
+import (
+	"runtime"
+)
+
 const (
 	GoPlayitVersion string = "0.17.1"
+	PlayitAPI       string = "https://api.playit.gg" // Playit API
 
 	TunnelTypeMCBedrock string = "minecraft-bedrock" // Minecraft Bedrock server
 	TunnelTypeMCJava    string = "minecraft-java"    // Minecraft java server
@@ -26,12 +31,6 @@ const (
 )
 
 var (
-	PlayitAPI string   = "https://api.playit.gg" // Playit API
-	PortType  []string = []string{
-		PortTypeBoth,
-		PortTypeTcp,
-		PortTypeUdp,
-	} // Tunnel protocol supports
 	TunnelType []string = []string{
 		TunnelTypeMCBedrock,
 		TunnelTypeMCJava,
@@ -56,4 +55,60 @@ var (
 type Api struct {
 	Code   string // Claim code
 	Secret string // Agent Secret
+}
+
+type PortProto string
+func (proto PortProto) IsValid() bool {
+	switch proto {
+	case PortProto(PortTypeBoth):
+	case PortProto(PortTypeTcp):
+	case PortProto(PortTypeUdp): return true
+	}
+	return false
+}
+func (proto PortProto) SetBoth() {
+	proto = "both"
+}
+func (proto PortProto) SetTcp() {
+	proto = "tcp"
+}
+func (proto PortProto) SetUdp() {
+	proto = "udp"
+}
+
+type Platform string
+func (Platform Platform) Host() {
+	switch runtime.GOOS {
+	case "linux": Platform = "linux";
+	case "freebsd": Platform = "freebsd";
+	case "windows": Platform = "windows";
+	case "darwin": Platform = "macos";
+	case "android": Platform = "android";
+	case "ios": Platform = "ios";
+	default: Platform = "unknown";
+	}
+}
+func (Platform Platform) Linux() {
+	Platform = "linux"
+}
+func (Platform Platform) Freebsd() {
+	Platform = "freebsd"
+}
+func (Platform Platform) Windows() {
+	Platform = "windows"
+}
+func (Platform Platform) Macos() {
+	Platform = "macos"
+}
+func (Platform Platform) Android() {
+	Platform = "android"
+}
+func (Platform Platform) Ios() {
+	Platform = "ios"
+}
+func (Platform Platform) MinecraftPlugin() {
+	Platform = "minecraft-plugin"
+}
+func (Platform Platform) Unknown() {
+	Platform = "unknown"
 }

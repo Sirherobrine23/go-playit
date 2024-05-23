@@ -1,110 +1,140 @@
 package tunnel
 
 import (
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 )
 
-type ClaimInstructions struct {
-	Address AddressPort
-	Token   []byte
-}
-
-func (w *ClaimInstructions) WriteTo(I io.Writer) error {
-	if err := w.Address.WriteTo(I); err != nil {
-		return err
-	} else if err := WriteU64(I, uint64(len(w.Token))); err != nil {
-		return err
-	} else if err = binary.Write(I, binary.BigEndian, w.Token); err != nil {
-		return err
-	}
-	return nil
-}
-func (w *ClaimInstructions) ReadFrom(I io.Reader) error {
-	w.Address = AddressPort{}
-	if err := w.Address.ReadFrom(I); err != nil {
-		return err
-	}
-	w.Token = make([]byte, ReadU64(I))
-	if err := ReadBuff(I, w.Token); err != nil {
-		return err
-	}
-	return nil
-}
-
-type NewClient struct {
-	ConnectAddr       AddressPort
-	PeerAddr          AddressPort
-	ClaimInstructions ClaimInstructions
-	TunnelServerId    uint64
-	DataCenterId      uint32
-}
-
-func (w *NewClient) WriteTo(I io.Writer) error {
-	if err := w.ConnectAddr.WriteTo(I); err != nil {
-		return err
-	} else if w.PeerAddr.WriteTo(I); err != nil {
-		return err
-	} else if w.ClaimInstructions.WriteTo(I); err != nil {
-		return err
-	} else if err := WriteU64(I, w.TunnelServerId); err != nil {
-		return err
-	} else if err := WriteU32(I, w.DataCenterId); err != nil {
-		return err
-	}
-	return nil
-}
-func (w *NewClient) ReadFrom(I io.Reader) error {
-	w.ConnectAddr, w.PeerAddr = AddressPort{}, AddressPort{}
-	if err := w.ConnectAddr.ReadFrom(I); err != nil {
-		return err
-	} else if err := w.PeerAddr.ReadFrom(I); err != nil {
-		return err
-	} else if err := w.ClaimInstructions.ReadFrom(I); err != nil {
-		return err
-	}
-	w.TunnelServerId, w.DataCenterId = ReadU64(I), ReadU32(I)
-	return nil
-}
+var (
+	ErrFeedRead error = fmt.Errorf("invalid controlFeed id")
+)
 
 type ControlFeed struct {
 	Response  *ControlRpcMessage[*ControlResponse]
 	NewClient *NewClient
 }
 
-func (w *ControlFeed) WriteTo(I io.Writer) error {
-	defer func(){
-		d, _ := json.MarshalIndent(w, "", "  ")
-		LogDebug.Printf("Write Feed: %s\n", string(d))
-	}()
-	if w.Response != nil {
-		if err := WriteU32(I, 1); err != nil {
-			return err
-		}
-		return w.Response.WriteTo(I)
-	} else if w.NewClient != nil {
-		if err := WriteU32(I, 2); err != nil {
-			return err
-		}
-		return w.NewClient.WriteTo(I)
+func (Feed *ControlFeed) ReadFrom(r io.Reader) (n int64, err error) {
+	id := readU32(r)
+	if id == 1 {
+		Feed.Response = new(ControlRpcMessage[*ControlResponse])
+		Feed.Response.Content = new(ControlResponse)
+		n, err = Feed.Response.ReadFrom(r)
+		n += 4
+		return
+	} else if id == 2 {
+		Feed.NewClient = &NewClient{}
+		n, err = Feed.NewClient.ReadFrom(r)
+		n += 4
+		return
 	}
-	return fmt.Errorf("set ResponseControl or NewClient")
+	return 4, ErrFeedRead
 }
-func (w *ControlFeed) ReadFrom(I io.Reader) error {
-	defer func(){
-		d, _ := json.MarshalIndent(w, "", "  ")
-		LogDebug.Printf("Read Feed: %s\n", string(d))
-	}()
-	switch ReadU32(I) {
-	case 1:
-		w.Response = &ControlRpcMessage[*ControlResponse]{}
-		w.Response.Content = &ControlResponse{}
-		return w.Response.ReadFrom(I)
-	case 2:
-		w.NewClient = &NewClient{}
-		return w.NewClient.ReadFrom(I)
+func (Feed *ControlFeed) WriteTo(w io.Writer) (n int64, err error) {
+	if Feed.Response != nil {
+		if err := writeU32(w, 1); err != nil {
+			return 0, err
+		}
+		n, err = Feed.Response.WriteTo(w)
+		n += 4
+		return
+	} else if Feed.NewClient != nil {
+		if err := writeU32(w, 2); err != nil {
+			return 0, err
+		}
+		n, err = Feed.NewClient.WriteTo(w)
+		n += 4
+		return
 	}
-	return fmt.Errorf("invalid ControlFeed id")
+	return 0, fmt.Errorf("")
+}
+
+type NewClient struct {
+	ConnectAddr       netip.AddrPort
+	PeerAddr          netip.AddrPort
+	ClaimInstructions ClaimInstructions
+	TunnelServerId    uint64
+	DataCenterId      uint32
+}
+
+func (client *NewClient) ReadFrom(r io.Reader) (n int64, err error) {
+	client.ConnectAddr, n, err = addrPortRead(r)
+	if err != nil {
+		return n, err
+	}
+
+	n2 := n
+	client.PeerAddr, n, err = addrPortRead(r)
+	if err != nil {
+		return n2 + n, err
+	}
+
+	n3 := n2 + n
+	n, err = client.ClaimInstructions.ReadFrom(r);
+	if err != nil {
+		return n3 + n, err
+	}
+	n+=n3 + 8 + 4
+	client.TunnelServerId, client.DataCenterId = readU64(r), readU32(r)
+	return
+}
+func (client *NewClient) WriteTo(w io.Writer) (n int64, err error) {
+	n, err = addrPortWrite(w, client.ConnectAddr)
+	if err != nil {
+		return n, err
+	}
+	n2 := n
+	n, err = addrPortWrite(w, client.PeerAddr)
+	if err != nil {
+		return n+n2, err
+	}
+	n3:= n+n2
+	if n, err = client.ClaimInstructions.WriteTo(w); err != nil {
+		return n + n3, err
+	}
+
+	n4 := n + n3
+	if err = writeU64(w, client.TunnelServerId); err != nil {
+		return n4, err
+	}
+	n4 += 8
+	if err = writeU32(w, client.DataCenterId); err != nil {
+		return n4, err
+	}
+	n = n4+8
+	return
+}
+
+type ClaimInstructions struct {
+	Address netip.AddrPort
+	Token   []byte
+}
+
+func (claim *ClaimInstructions) ReadFrom(r io.Reader) (n int64, err error) {
+	claim.Address, n, err = addrPortRead(r)
+	if err != nil {
+		return n, err
+	}
+	claim.Token, err = readByteN(r, int(readU64(r)))
+	n += int64(len(claim.Token)) + 8
+	return
+}
+func (claim *ClaimInstructions) WriteTo(w io.Writer) (n int64, err error) {
+	n, err = addrPortWrite(w, claim.Address)
+	if err != nil {
+		return n, err
+	}
+
+	if err = writeU64(w, uint64(len(claim.Token))); err != nil {
+		return n, err
+	}
+
+	n2 := 8 + n
+	n, err = writeBytes(w, claim.Token)
+	if err != nil {
+		return n2, err
+	}
+	n = n2 + n
+	return
 }

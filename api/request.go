@@ -46,22 +46,22 @@ func (w *Api) requestToApi(Path string, Body io.Reader, Response any, Headers ma
 	if err = json.NewDecoder(res.Body).Decode(&ResBody); err != nil {
 		return res, err
 	}
-
 	if res.StatusCode >= 300 {
+		defer res.Body.Close()
 		var errStatus struct {
 			Type    string `json:"type"`
 			Message string `json:"message"`
 		}
 
 		if data, is := ResBody.Data.(string); is {
-			return res, fmt.Errorf(data)
+			return res, fmt.Errorf("api.playit.gg: %s", data)
 		} else if err = recodeJson(&ResBody.Data, &errStatus); err != nil {
 			return res, err
 		}
 		if len(errStatus.Message) > 0 {
-			return res, fmt.Errorf("%s: %s", errStatus.Type, errStatus.Message)
+			return res, fmt.Errorf("api.playit.gg: %s %s", errStatus.Type, errStatus.Message)
 		}
-		return res, fmt.Errorf("%s", errStatus.Type)
+		return res, fmt.Errorf("api.playit.gg: %s", errStatus.Type)
 	}
 	if Response != nil {
 		if err = recodeJson(&ResBody.Data, Response); err != nil {

@@ -32,7 +32,7 @@ type AgentTunnel struct {
 type AgentPendingTunnel struct {
 	ID         uuid.UUID `json:"id"`          // Agent ID
 	Name       string    `json:"name"`        // Agent Name
-	PortType   string    `json:"proto"`       // Port type
+	PortType   PortProto `json:"proto"`       // Port type
 	PortCount  uint16    `json:"port_count"`  // Port count
 	TunnelType string    `json:"tunnel_type"` // Tunnel type
 	Disabled   bool      `json:"is_disabled"` // Tunnel is disabled

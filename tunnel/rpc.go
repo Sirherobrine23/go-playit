@@ -1,13 +1,13 @@
 package tunnel
 
 import (
-	"encoding/json"
+	"encoding/binary"
 	"io"
 )
 
 type MessageEncoding interface {
-	WriteTo(I io.Writer) error
-	ReadFrom(I io.Reader) error
+	io.ReaderFrom
+	io.WriterTo
 }
 
 type ControlRpcMessage[T MessageEncoding] struct {
@@ -15,22 +15,22 @@ type ControlRpcMessage[T MessageEncoding] struct {
 	Content   T // Convert with .(*type)
 }
 
-func (w *ControlRpcMessage[T]) WriteTo(I io.Writer) error {
-	if err := WriteU64(I, w.RequestID); err != nil {
-		return err
+func (rpc *ControlRpcMessage[T]) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, rpc.RequestID); err != nil {
+		return 0, err
+	} else if n, err = rpc.Content.WriteTo(w); err != nil {
+		return 8, err
 	}
-	defer func() {
-		d, _ := json.MarshalIndent(w, "", "  ")
-		LogDebug.Printf("Write RPC: %s\n", string(d))
-	}()
-	return w.Content.WriteTo(I)
+	n += 8
+	return
 }
-
-func (w *ControlRpcMessage[T]) ReadFrom(I io.Reader) error {
-	w.RequestID = ReadU64(I)
-	defer func() {
-		d, _ := json.MarshalIndent(w, "", "  ")
-		LogDebug.Printf("Read RPC: %s\n", string(d))
-	}()
-	return w.Content.ReadFrom(I)
+func (rpc *ControlRpcMessage[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &rpc.RequestID); err != nil {
+		n = 0
+		return n, err
+	} else if n, err = rpc.Content.ReadFrom(r); err != nil {
+		return 8, err
+	}
+	n += 8
+	return
 }
