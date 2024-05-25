@@ -1,4 +1,4 @@
-package tunnel
+package proto
 
 import (
 	"crypto/hmac"

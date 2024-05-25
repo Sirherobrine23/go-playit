@@ -1,0 +1,175 @@
+package network
+
+import (
+	"fmt"
+	"log"
+	"net"
+	"net/netip"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"sirherobrine23.org/playit-cloud/go-playit/api"
+	"sirherobrine23.org/playit-cloud/go-playit/tunnel"
+)
+
+type UdpClient struct {
+	clientKey      ClientKey
+	sendFlow       tunnel.UdpFlow
+	udpTunnel      tunnel.UdpTunnel
+	localUdp       net.UDPConn
+	localStartAddr netip.AddrPort
+	tunnelFromPort uint16
+	tunnelToPort   uint16
+	udpClientsLock sync.Mutex
+	udpClients     map[ClientKey]UdpClient
+	lastActivity   atomic.Uint32
+}
+
+func (self *UdpClient) SendLocal(dstPort uint16, data []byte) error {
+	portOffset := dstPort - self.tunnelFromPort
+	self.lastActivity.Store(uint32(time.Now().UnixMilli() / 1_000))
+	if portOffset == 0 {
+		_, err := self.localUdp.WriteToUDP(data, net.UDPAddrFromAddrPort(self.localStartAddr))
+		return err
+	}
+	_, err := self.localUdp.WriteToUDP(data, net.UDPAddrFromAddrPort(netip.AddrPortFrom(self.localStartAddr.Addr(), self.localStartAddr.Port()+portOffset)))
+	return err
+}
+
+type HostToTunnelForwarder struct{ UdpClient }
+
+func (self *HostToTunnelForwarder) Run() {
+	buffer := make([]byte, 2048)
+	for {
+		buffer = make([]byte, 2048)
+		self.localUdp.SetReadDeadline(time.Now().Add(time.Second * 30))
+		size, source, err := self.localUdp.ReadFromUDPAddrPort(buffer)
+		if err != nil {
+			log.Println(err)
+			break
+		} else if source.Addr().Compare(self.localStartAddr.Addr()) != 0 {
+			// "dropping packet from different unexpected source"
+			continue
+		}
+
+		portCount := self.tunnelToPort - self.tunnelFromPort
+		localFrom := self.localStartAddr.Port()
+		localTo := localFrom + portCount
+		if source.Port() < localFrom || localTo <= source.Port() {
+			// "dropping packet outside of expected port range"
+			continue
+		}
+		buffer = buffer[:size]
+		portOffset := source.Port() - localFrom
+		flow := self.sendFlow.WithSrcPort(self.tunnelFromPort + portOffset)
+		if _, err = self.udpTunnel.Send(buffer, flow); err != nil {
+			// "failed to send packet to through tunnel"
+		}
+	}
+
+	self.UdpClient.udpClientsLock.Lock()
+	if _, is := self.UdpClient.udpClients[self.clientKey]; is {
+		// if !reflect.DeepEqual(v, self) {} else {}
+		delete(self.UdpClient.udpClients, self.clientKey)
+	}
+	self.UdpClient.udpClientsLock.Unlock()
+}
+
+type ClientKey struct {
+	ClientAddr, TunnelAddr netip.AddrPort
+}
+
+type UdpClients struct {
+	udpTunnel        tunnel.UdpTunnel
+	lookup           AddressLookup[netip.AddrPort]
+	udpClientsLocker sync.Mutex
+	udpClients       map[ClientKey]UdpClient
+	UseSpecialLan    bool
+}
+
+func NewUdpClients(Tunnel tunnel.UdpTunnel, Lookup AddressLookup[netip.AddrPort]) UdpClients {
+	return UdpClients{
+		udpTunnel:        Tunnel,
+		lookup:           Lookup,
+		udpClientsLocker: sync.Mutex{},
+		udpClients:       make(map[ClientKey]UdpClient),
+		UseSpecialLan:    true,
+	}
+}
+
+func (self *UdpClients) ClientCount() int {
+	return len(self.udpClients)
+}
+
+func (self *UdpClients) ForwardPacket(Flow tunnel.UdpFlow, data []byte) error {
+	flowDst := Flow.Dst()
+	found := self.lookup.Lookup(flowDst.Addr(), Flow.Dst().Port(), api.PortProto("udp"))
+	if found == nil {
+		return fmt.Errorf("could not find tunnel")
+	}
+
+	key := ClientKey{ClientAddr: Flow.Src(), TunnelAddr: netip.AddrPortFrom(flowDst.Addr(), found.FromPort)}
+	for kkey, client := range self.udpClients {
+		if reflect.DeepEqual(kkey, key) {
+			return client.SendLocal(flowDst.Port(), data)
+		}
+	}
+	self.udpClientsLocker.Lock()
+	defer self.udpClientsLocker.Unlock()
+
+	client, err := func() (*UdpClient, error) {
+		for kkey, client := range self.udpClients {
+			if reflect.DeepEqual(kkey, key) {
+				return &client, nil
+			}
+		}
+		localAddr := found.Value
+		var sendFlow tunnel.UdpFlow
+		var clientAddr netip.AddrPort
+		if Flow.V4 != nil {
+			clientAddr = netip.AddrPortFrom(Flow.V4.Src.Addr(), Flow.V4.Src.Port())
+			sendFlow.V4 = &tunnel.UdpFlowBase{
+				Src: netip.AddrPortFrom(Flow.V4.Dst.Addr(), found.FromPort),
+				Dst: Flow.Src(),
+			}
+		} else {
+			clientAddr = netip.AddrPortFrom(Flow.V6.Src.Addr(), Flow.V6.Src.Port())
+			sendFlow.V6 = &struct {
+				tunnel.UdpFlowBase
+				Flow uint32
+			}{
+				Flow: sendFlow.V6.Flow,
+				UdpFlowBase: tunnel.UdpFlowBase{
+					Src: netip.AddrPortFrom(Flow.V6.Dst.Addr(), found.FromPort),
+					Dst: Flow.Src(),
+				},
+			}
+		}
+
+		usock, err := UdpSocket(self.UseSpecialLan, clientAddr, localAddr)
+		if err != nil {
+			return nil, err
+		}
+		client := UdpClient{
+			clientKey:      key,
+			sendFlow:       sendFlow,
+			localUdp:       *usock,
+			udpTunnel:      self.udpTunnel,
+			localStartAddr: localAddr,
+			tunnelFromPort: found.FromPort,
+			tunnelToPort:   found.ToPort,
+			udpClients:     self.udpClients,
+			lastActivity:   atomic.Uint32{},
+		}
+
+		self.udpClients[key] = client
+		go (&HostToTunnelForwarder{client}).Run()
+		return &client, nil
+	}()
+	if err != nil {
+		return err
+	}
+	return client.SendLocal(flowDst.Port(), data)
+}
