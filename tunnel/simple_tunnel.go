@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/netip"
 	"slices"
 	"time"
@@ -15,8 +17,8 @@ func getControlAddresses(api api.Api) ([]netip.AddrPort, error) {
 		return nil, err
 	}
 	addresses := []netip.AddrPort{}
-	for _, ip6 := range append(routing.Targets6, routing.Targets4...) {
-		addresses = append(addresses, netip.AddrPortFrom(ip6, 5525))
+	for _, ipd := range append(routing.Targets6, routing.Targets4...) {
+		addresses = append(addresses, netip.AddrPortFrom(ipd, 5525))
 	}
 	return addresses, nil
 }
@@ -108,10 +110,12 @@ func (self *SimpleTunnel) UdpTunnel() UdpTunnel {
 
 func (self *SimpleTunnel) Update() *proto.NewClient {
 	if self.controlChannel.IsExpired() {
-		if err := self.controlChannel.Authenticate(); err != nil {
+		auth, err := self.controlChannel.Authenticate()
+		if err != nil {
 			time.Sleep(time.Second * 2)
 			return nil
 		}
+		self.controlChannel = auth
 	}
 
 	now := time.Now()
@@ -137,12 +141,16 @@ func (self *SimpleTunnel) Update() *proto.NewClient {
 		if err := self.controlChannel.SendKeepAlive(100); err != nil {}
 		if err := self.controlChannel.SendSetupUdpChannel(1); err != nil {}
 	}
-	timeout := 0
+
 	for range 30 {
 		feed, err := self.controlChannel.RecvFeedMsg()
 		if err != nil {
+			fmt.Println(err)
 			continue
-		} else if newClient := feed.NewClient; newClient != nil {
+		}
+		d,_:=json.MarshalIndent(feed, "", "  ")
+		fmt.Printf("SimTunne: %s\n", string(d))
+		if newClient := feed.NewClient; newClient != nil {
 			return newClient
 		} else if msg := feed.Response; msg != nil {
 			if content := msg.Content; content != nil {
@@ -154,12 +162,11 @@ func (self *SimpleTunnel) Update() *proto.NewClient {
 					self.controlChannel.SetExpired()
 				} else if pong := content.Pong; pong != nil {
 					self.lastPong = time.Now()
-					if pong.ClientAddr.Compare(self.controlChannel.Conn.Pong.ClientAddr) != 0 {}
+					if pong.ClientAddr.Compare(self.controlChannel.Conn.Pong.ClientAddr) != 0 {
+						fmt.Println("client ip changed", pong.ClientAddr.String(), self.controlChannel.Conn.Pong.ClientAddr.String())
+					}
 				}
 			}
-		}
-		if timeout++; timeout >= 10 {
-			break
 		}
 	}
 	if self.lastPong.UnixMilli() != 0 && time.Now().UnixMilli() - self.lastPong.UnixMilli() > 6_000 {

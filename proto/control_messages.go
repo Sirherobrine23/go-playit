@@ -88,7 +88,7 @@ func (Agent *AgentCheckPortMapping) ReadFrom(r io.Reader) error {
 
 type Ping struct {
 	Now         time.Time
-	CurrentPing *uint64
+	CurrentPing *uint32
 	SessionId   *AgentSessionId
 }
 
@@ -96,20 +96,36 @@ func (ping *Ping) WriteTo(w io.Writer) error {
 	if err := enc.WriteU64(w, uint64(ping.Now.UnixMilli())); err != nil {
 		return err
 	}
-	if err := enc.WriteOption(w, ping.CurrentPing, func(w io.Writer) error {
-		return enc.WriteU64(w, *ping.CurrentPing)
-	}); err != nil {
-		return err
+
+	if ping.CurrentPing == nil {
+		if err := enc.WriteU8(w, 0); err != nil {
+			return err
+		}
+	} else {
+		if err := enc.WriteU8(w, 1); err != nil {
+			return err
+		} else if err := enc.WriteU32(w, *ping.CurrentPing); err != nil {
+			return err
+		}
 	}
-	if err := enc.WriteOption(w, ping.SessionId, ping.SessionId.WriteTo); err != nil {
-		return err
+
+	if ping.SessionId == nil {
+		if err := enc.WriteU8(w, 0); err != nil {
+			return err
+		}
+	} else {
+		if err := enc.WriteU8(w, 1); err != nil {
+			return err
+		} else if err := ping.SessionId.WriteTo(w); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 func (ping *Ping) ReadFrom(r io.Reader) error {
 	ping.Now = time.UnixMilli(int64(enc.ReadU64(r)))
 	if err := enc.ReadOption(r, func(r io.Reader) error {
-		*ping.CurrentPing = enc.ReadU64(r)
+		*ping.CurrentPing = enc.ReadU32(r)
 		return nil
 	}); err != nil {
 		return err
@@ -342,10 +358,18 @@ func (pong *Pong) WriteTo(w io.Writer) error {
 		return err
 	} else if err := enc.AddrPortWrite(w, pong.TunnelAddr); err != nil {
 		return err
-	} else if err := enc.WriteOption(w, pong.SessionExpireAt, func(w io.Writer) (err error) {
-		return enc.Write64(w, pong.SessionExpireAt.UnixMilli())
-	}); err != nil {
-		return err
+	}
+
+	if pong.SessionExpireAt == nil {
+		if err := enc.Write8(w, 0); err != nil {
+			return err
+		}
+	} else {
+		if err := enc.Write8(w, 1); err != nil {
+			return err
+		} else if err := enc.Write64(w, pong.SessionExpireAt.UnixMilli()); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -361,11 +385,11 @@ func (pong *Pong) ReadFrom(r io.Reader) error {
 		return err
 	} else if err := enc.ReadOption(r, func(r io.Reader) (err error) {
 		pong.SessionExpireAt = new(time.Time)
-		d, err := time.UnixMilli(enc.Read64(r)).MarshalBinary()
-		if err != nil {
-			return err
-		}
-		return pong.SessionExpireAt.UnmarshalBinary(d)
+		*pong.SessionExpireAt = time.UnixMilli(enc.Read64(r)) // Fix set SessionExpireAt
+		// expAt := time.UnixMilli(enc.Read64(r)) // Fix set SessionExpireAt
+		// fmt.Printf("pong.SessionExpireAt: %s\n", expAt.String())
+		// pong.SessionExpireAt = &expAt
+		return nil
 	}); err != nil {
 		return err
 	}

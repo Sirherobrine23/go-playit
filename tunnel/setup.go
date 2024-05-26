@@ -3,6 +3,7 @@ package tunnel
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
@@ -38,7 +39,7 @@ func (self *SetupFindSuitableChannel) Setup() (ConnectedControl, error) {
 		}
 		for range attempts {
 			buffer := new(bytes.Buffer)
-			if err = (&proto.ControlRpcMessage[*proto.ControlRequest]{
+			if err := (&proto.ControlRpcMessage[*proto.ControlRequest]{
 				RequestID: 1,
 				Content: &proto.ControlRequest{
 					Ping: &proto.Ping{
@@ -48,10 +49,12 @@ func (self *SetupFindSuitableChannel) Setup() (ConnectedControl, error) {
 					},
 				},
 			}).WriteTo(buffer); err != nil {
-				return ConnectedControl{}, err
-			} else if _, err = socket.WriteTo(buffer.Bytes(), net.UDPAddrFromAddrPort(addr)); err != nil {
-				return ConnectedControl{}, fmt.Errorf("failed to send initial ping: %s", err.Error())
+				continue
 			}
+			if _, err := socket.WriteTo(buffer.Bytes(), net.UDPAddrFromAddrPort(addr)); err != nil {
+				break
+			}
+
 			buffer.Reset()
 			var waits int
 			if waits = 5; isIPv6 {
@@ -59,29 +62,33 @@ func (self *SetupFindSuitableChannel) Setup() (ConnectedControl, error) {
 			}
 			for range waits {
 				buff := make([]byte, 1024)
-				socket.SetReadDeadline(time.Now().Add(time.Millisecond * 5))
-				size, peer, err := socket.ReadFromUDPAddrPort(buff)
+				socket.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
+				size, peer, err := socket.ReadFrom(buff)
 				if err != nil {
-					continue
-				} else if peer.Compare(addr) != 0 {
+					if err, ok := err.(net.Error); ok && err.Timeout() {
+						continue
+					}
+					break
+				} else if peer.String() != addr.String() {
 					continue
 				}
 				buffer = bytes.NewBuffer(buff[:size])
 				feed := proto.ControlFeed{}
 				if err := feed.ReadFrom(buffer); err != nil {
-					continue
-				} else if feed.Response != nil {
-					continue
+					break
+				} else if feed.Response == nil {
+					break
 				} else if feed.Response.RequestID != 1 {
-					continue
-				} else if feed.Response.Content.Pong != nil {
-					continue
+					break
+				} else if feed.Response.Content.Pong == nil {
+					break
 				}
 				return ConnectedControl{addr, *socket, *feed.Response.Content.Pong}, nil
 			}
 		}
+		socket.Close()
 	}
-	return ConnectedControl{}, fmt.Errorf("failed to connect")
+	return ConnectedControl{}, fmt.Errorf("failed to connectans setup initial connection")
 }
 
 type ConnectedControl struct {
@@ -111,8 +118,12 @@ func (self *ConnectedControl) Authenticate(Api api.Api) (AuthenticatedControl, e
 		}
 		for range 5 {
 			buff := make([]byte, 1024)
+			self.Udp.SetReadDeadline(time.Now().Add(time.Millisecond * 5))
 			size, remote, err := self.Udp.ReadFromUDPAddrPort(buff)
 			if err != nil {
+				if at, ok := err.(net.Error); ok && at.Timeout() {
+					continue
+				}
 				break
 			} else if self.ControlAddr.Compare(remote) != 0 {
 				continue
@@ -122,8 +133,12 @@ func (self *ConnectedControl) Authenticate(Api api.Api) (AuthenticatedControl, e
 			var feed proto.ControlFeed
 			if err := feed.ReadFrom(buffer); err != nil {
 				continue
-			} else if response := feed.Response; response != nil {
+			}
+
+			if response := feed.Response; response != nil {
 				if response.RequestID != 10 {
+					d,_:=json.MarshalIndent(feed, "", "  ")
+					fmt.Printf("Setup: %s\n", string(d))
 					continue
 				}
 				if content := response.Content; content.RequestQueued {
@@ -134,14 +149,6 @@ func (self *ConnectedControl) Authenticate(Api api.Api) (AuthenticatedControl, e
 				} else if content.Unauthorized {
 					return AuthenticatedControl{}, fmt.Errorf("unauthorized")
 				} else if registered := content.AgentRegistered; registered != nil {
-					// secret_key,
-					// api_client: api,
-					// conn: self,
-					// last_pong: pong,
-					// registered,
-					// buffer,
-					// current_ping: None,
-					// force_expired: false,
 					return AuthenticatedControl{
 						Api:         Api,
 						Conn:        *self,
@@ -155,5 +162,5 @@ func (self *ConnectedControl) Authenticate(Api api.Api) (AuthenticatedControl, e
 			}
 		}
 	}
-	return AuthenticatedControl{}, fmt.Errorf("failed to connect")
+	return AuthenticatedControl{}, fmt.Errorf("failed to connect and authenticate")
 }

@@ -17,7 +17,7 @@ type AuthenticatedControl struct {
 	Registered  proto.AgentRegistered
 	buffer      *bytes.Buffer
 	ForceExpire bool
-	CurrentPing *uint64
+	CurrentPing *uint32
 }
 
 func (self *AuthenticatedControl) SendKeepAlive(requestId uint64) error {
@@ -81,37 +81,39 @@ func (self *AuthenticatedControl) IntoRequireAuth() ConnectedControl {
 	}
 }
 
-func (self *AuthenticatedControl) Authenticate() error {
+func (self *AuthenticatedControl) Authenticate() (AuthenticatedControl, error) {
 	conn := self.IntoRequireAuth()
-	var err error
-	if *self, err = conn.Authenticate(self.Api); err != nil {
-		return err
-	}
-	return nil
+	return conn.Authenticate(self.Api)
 }
 
 func (self *AuthenticatedControl) RecvFeedMsg() (proto.ControlFeed, error) {
 	buff := make([]byte, 1024)
+	fmt.Println("RecvFeedMsg")
+	self.Conn.Udp.SetReadDeadline(*new(time.Time))
+	// self.Conn.Udp.SetReadDeadline(time.Now().Add(23_000_000_000))
 	size, remote, err := self.Conn.Udp.ReadFromUDPAddrPort(buff)
-	self.buffer.Reset()
-	self.buffer.Write(buff[:size])
+	fmt.Println("End RecvFeedMsg")
 	if err != nil {
 		return proto.ControlFeed{}, err
 	} else if remote.Compare(self.Conn.ControlAddr) != 0 {
 		return proto.ControlFeed{}, fmt.Errorf("invalid remote, expected %q got %q", remote.String(), self.Conn.ControlAddr.String())
 	}
+	self.buffer.Reset()
+	self.buffer.Write(buff[:size])
 	feed := proto.ControlFeed{}
 	if err := feed.ReadFrom(self.buffer); err != nil {
 		return proto.ControlFeed{}, err
 	}
-	if feed.Response != nil {
-		res := feed.Response
+	if res := feed.Response; res != nil {
 		if registered := res.Content.AgentRegistered; registered != nil {
 			self.Registered = *registered
-		}
-		if pong := res.Content.Pong; pong != nil {
-			*self.CurrentPing = uint64(time.Now().UnixMilli() - pong.RequestNow.UnixMilli())
+		} else if pong := res.Content.Pong; pong != nil {
+			self.CurrentPing = new(uint32)
+			*self.CurrentPing = uint32(time.Now().UnixMilli() - pong.RequestNow.UnixMilli())
 			self.LastPong = *pong
+			if expires_at := pong.SessionExpireAt; expires_at != nil {
+				self.Registered.ExpiresAt = *expires_at
+			}
 		}
 	}
 	return feed, nil

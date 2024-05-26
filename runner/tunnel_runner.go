@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"fmt"
 	"io"
 	"net/netip"
 	"sync/atomic"
@@ -44,7 +45,6 @@ func (self *TunnelRunner) SetSpecialLan(setUse bool) {
 func (self *TunnelRunner) Run() {
 	end := make(chan error)
 	tunnel := self.Tunnel
-	udp := tunnel.UdpTunnel()
 	go func() {
 		lastControlUpdate := time.Now().UnixMilli()
 		for self.KeepRunning.Load() {
@@ -54,7 +54,9 @@ func (self *TunnelRunner) Run() {
 				if _, err := tunnel.ReloadControlAddr(); err != nil {
 				}
 			}
+			fmt.Println("Reload")
 			if new_client := tunnel.Update(); new_client != nil {
+				fmt.Println("New TCP Client")
 				clients := self.TcpClients
 				found := self.Lookup.Lookup(new_client.ConnectAddr.Addr(), new_client.ConnectAddr.Port(), api.PortProto("tcp"))
 				if found == nil {
@@ -90,24 +92,25 @@ func (self *TunnelRunner) Run() {
 		}
 	}()
 
-	udp_clients := self.UdpClients
-	go func(){
-		buffer := make([]byte, 2048)
-		// had_success := false
-		for self.KeepRunning.Load() {
-			rx, err := udp.ReceiveFrom(buffer)
-			if err != nil {
-				time.Sleep(time.Second)
-				continue
-			}
-			if rx.ConfirmerdConnection {
-				continue
-			}
-			bytes, flow := rx.ReceivedPacket.Bytes, rx.ReceivedPacket.Flow
-			if err := udp_clients.ForwardPacket(flow, buffer[:bytes]); err != nil {
-				panic(err)
-			}
-		}
-	}()
+	// udp_clients := self.UdpClients
+	// go func(){
+	// 	buffer := make([]byte, 2048)
+	// 	// had_success := false
+	// 	for self.KeepRunning.Load() {
+	// 		rx, err := udp.ReceiveFrom(buffer)
+	// 		fmt.Println(rx)
+	// 		if err != nil {
+	// 			time.Sleep(time.Second)
+	// 			continue
+	// 		}
+	// 		if rx.ConfirmerdConnection {
+	// 			continue
+	// 		}
+	// 		bytes, flow := rx.ReceivedPacket.Bytes, rx.ReceivedPacket.Flow
+	// 		if err := udp_clients.ForwardPacket(flow, buffer[:bytes]); err != nil {
+	// 			panic(err)
+	// 		}
+	// 	}
+	// }()
 	<-end
 }
