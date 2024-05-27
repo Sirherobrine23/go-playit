@@ -88,11 +88,9 @@ func (self *AuthenticatedControl) Authenticate() (AuthenticatedControl, error) {
 
 func (self *AuthenticatedControl) RecvFeedMsg() (proto.ControlFeed, error) {
 	buff := make([]byte, 1024)
-	fmt.Println("RecvFeedMsg")
-	self.Conn.Udp.SetReadDeadline(*new(time.Time))
-	// self.Conn.Udp.SetReadDeadline(time.Now().Add(23_000_000_000))
+	// self.Conn.Udp.SetReadDeadline(*new(time.Time))
+	self.Conn.Udp.SetReadDeadline(*new(time.Time)) // Remove deadline
 	size, remote, err := self.Conn.Udp.ReadFromUDPAddrPort(buff)
-	fmt.Println("End RecvFeedMsg")
 	if err != nil {
 		return proto.ControlFeed{}, err
 	} else if remote.Compare(self.Conn.ControlAddr) != 0 {

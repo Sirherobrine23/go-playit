@@ -3,7 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"net"
+	"fmt"
 	"net/netip"
 
 	"github.com/google/uuid"
@@ -15,18 +15,32 @@ type PortRange struct {
 }
 
 type AgentTunnel struct {
-	ID             uuid.UUID `json:"id"`
-	Name           string    `json:"name"`
-	IpNum          uint16    `json:"ip_num"`
-	RegionNum      uint16    `json:"region_num"`
-	Port           PortRange `json:"port"`
-	Proto          string    `json:"proto"`
-	LocalIp        net.IP    `json:"local_ip"`
-	LocalPort      uint16    `json:"local_port"`
-	TunnelType     string    `json:"tunnel_type"`
-	AssignedDomain string    `json:"assigned_domain"`
-	CustomDomain   string    `json:"custom_domain"`
-	Disabled       *any      `json:"disabled"`
+	ID             uuid.UUID  `json:"id"`
+	Name           string     `json:"name"`
+	IpNum          uint16     `json:"ip_num"`
+	RegionNum      uint16     `json:"region_num"`
+	Port           PortRange  `json:"port"`
+	Proto          string     `json:"proto"`
+	LocalIp        netip.Addr `json:"local_ip"`
+	LocalPort      uint16     `json:"local_port"`
+	TunnelType     string     `json:"tunnel_type"`
+	AssignedDomain string     `json:"assigned_domain"`
+	CustomDomain   string     `json:"custom_domain"`
+	Disabled       *any       `json:"disabled"`
+}
+
+func (tun *AgentTunnel) DestString() string {
+	return fmt.Sprintf("%s:%d", tun.LocalIp, tun.LocalPort)
+}
+func (tun *AgentTunnel) SourceString() string {
+	var addr string
+	if addr = tun.CustomDomain; addr == "" {
+		addr = tun.AssignedDomain
+	}
+	if tun.TunnelType == "minecraft-java" {
+		return addr
+	}
+	return fmt.Sprintf("%s:%d", addr, tun.Port.From)
 }
 
 type AgentPendingTunnel struct {

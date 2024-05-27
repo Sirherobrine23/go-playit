@@ -21,7 +21,7 @@ func asLocalMasked(ip uint32) uint32 {
 	return ip | 0x7F000000
 }
 
-func mapToLocalIP4(ip net.IP) net.IP {
+func mapToLocalIP4(ip net.IP) netip.Addr {
 	var ipUint32 uint32
 	if ip.To4() != nil { // Check if it's already IPv4
 		ipUint32 = binary.BigEndian.Uint32(ip.To4())
@@ -33,24 +33,22 @@ func mapToLocalIP4(ip net.IP) net.IP {
 			shuffle(binary.BigEndian.Uint32(bytes[12:16]))
 	}
 
-	return net.IPv4(
+	return netip.AddrFrom4([4]byte{
 		byte(asLocalMasked(ipUint32)>>24),
 		byte(asLocalMasked(ipUint32)>>16),
 		byte(asLocalMasked(ipUint32)>>8),
 		byte(asLocalMasked(ipUint32)),
-	)
+	})
 }
 
 func TcpSocket(SpecialLan bool, Peer, Host netip.AddrPort) (*net.TCPConn, error) {
 	isLoopback := Host.Addr().IsLoopback()
 	if isLoopback && SpecialLan {
-		local_ip := mapToLocalIP4(Peer.Addr().AsSlice());
-		stream, err := net.DialTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(netip.AddrFrom4([4]byte(local_ip.To4())), 0)), net.TCPAddrFromAddrPort(Host))
-		if err != nil {
-			// logDebug.Printf("Failed to establish connection using special lan %s for flow %s -> %s\n", local_ip, Peer.String(), Host.String())
-			return nil, err
+		stream, err := net.DialTCP("tcp", net.TCPAddrFromAddrPort(netip.AddrPortFrom(mapToLocalIP4(Peer.Addr().AsSlice()), 0)), net.TCPAddrFromAddrPort(Host))
+		if err == nil {
+			return stream, nil
 		}
-		return stream, nil
+		// logDebug.Printf("Failed to establish connection using special lan %s for flow %s -> %s\n", local_ip, Peer.String(), Host.String())
 	}
 	// logDebug.Printf("Failed to bind connection to special local address to support IP based banning")
 	stream, err := net.DialTCP("tcp", nil, net.TCPAddrFromAddrPort(Host))
@@ -66,20 +64,14 @@ func UdpSocket(SpecialLan bool, Peer, Host netip.AddrPort) (*net.UDPConn, error)
 	if isLoopback && SpecialLan {
 		local_ip := mapToLocalIP4(Peer.Addr().AsSlice());
 		local_port := 40000 + (Peer.Port() % 24000);
-		stream, err := net.DialUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.AddrFrom16([16]byte(local_ip)), local_port)), net.UDPAddrFromAddrPort(Host))
+		stream, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(local_ip, local_port)))
 		if err != nil {
-			// logDebug.Printf("Failed to bind UDP port to %d to have connections survive agent restart: %s", local_port, err.Error())
-			stream, err = net.DialUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.AddrFrom16([16]byte(local_ip)), 0)), net.UDPAddrFromAddrPort(Host))
+			stream, err = net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(local_ip, 0)))
 			if err != nil {
-				// err2 := err
-				stream, err = net.DialUDP("udp4", nil, nil)
-				if err != nil {
-					return nil, err
-				}
-				// logDebug.Printf("Failed to bind UDP to special local address, in-game ip banning will not work: %s", err2.Error())
+				stream, err = net.ListenUDP("udp4", nil)
 			}
 		}
-		return stream, nil
+		return stream, err
 	}
 	return net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(Host))
 }

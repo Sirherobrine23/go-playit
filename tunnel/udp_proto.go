@@ -20,83 +20,51 @@ const (
 	V6_LEN int = 48
 )
 
-type UdpFlowBase struct {
-	Src, Dst netip.AddrPort
-}
-
 type UdpFlow struct {
-	V4 *UdpFlowBase
-	V6 *struct {
-		UdpFlowBase
-		Flow uint32
-	}
+	IPSrc, IPDst netip.AddrPort
+	Flow uint32
 }
 
 func (w *UdpFlow) Len() int {
-	if w.V4 == nil {
-		return V6_LEN
+	if w.IPSrc.Addr().Is4() {
+		return V4_LEN
 	}
-	return V4_LEN
+	return V6_LEN
 }
 
 func (w *UdpFlow) Src() netip.AddrPort {
-	if w.V4 == nil {
-		return w.V6.UdpFlowBase.Src
-	}
-	return w.V4.Src
+	return w.IPSrc
 }
 func (w *UdpFlow) Dst() netip.AddrPort {
-	if w.V4 == nil {
-		return w.V6.UdpFlowBase.Dst
-	}
-	return w.V4.Dst
+	return w.IPDst
 }
 
 func (w *UdpFlow) WithSrcPort(port uint16) UdpFlow {
-	if w.V4 == nil {
-		return UdpFlow{
-			V6: &struct{UdpFlowBase; Flow uint32}{
-				Flow: w.V6.Flow,
-				UdpFlowBase: UdpFlowBase{
-					Src: netip.AddrPortFrom(w.V6.Src.Addr(), port),
-					Dst: w.V6.Src,
-				},
-			},
-		}
-	}
 	return UdpFlow{
-		V4: &UdpFlowBase{
-			Src: netip.AddrPortFrom(w.V4.Src.Addr(), port),
-			Dst: w.V4.Dst,
-		},
+		IPSrc: netip.AddrPortFrom(w.IPSrc.Addr(), port),
+		IPDst: w.IPSrc,
 	}
 }
 
 func (w *UdpFlow) WriteTo(writer io.Writer) error {
-	var conn UdpFlowBase
-	if w.V4 != nil {
-		conn = *w.V4
-	} else {
-		conn = w.V6.UdpFlowBase
-	}
-	if err := enc.WriteBytes(writer, conn.Src.Addr().AsSlice()); err != nil {
+	if err := enc.WriteBytes(writer, w.IPSrc.Addr().AsSlice()); err != nil {
 		return err
-	} else if err := enc.WriteBytes(writer, conn.Dst.Addr().AsSlice()); err != nil {
+	} else if err := enc.WriteBytes(writer, w.IPDst.Addr().AsSlice()); err != nil {
 		return err
-	} else if err := enc.WriteU16(writer, conn.Src.Port()); err != nil {
+	} else if err := enc.WriteU16(writer, w.IPSrc.Port()); err != nil {
 		return err
-	} else if err := enc.WriteU16(writer, conn.Dst.Port()); err != nil {
+	} else if err := enc.WriteU16(writer, w.IPDst.Port()); err != nil {
 		return err
 	}
 
-	if w.V4 != nil {
-		if err := enc.WriteU64(writer, REDIRECT_FLOW_4_FOOTER_ID_OLD); err != nil {
+	if w.IPSrc.Addr().Is6() {
+		if err := enc.WriteU32(writer, w.Flow); err != nil {
+			return err
+		} else if err := enc.WriteU64(writer, REDIRECT_FLOW_6_FOOTER_ID); err != nil {
 			return err
 		}
 	} else {
-		if err := enc.WriteU32(writer, w.V6.Flow); err != nil {
-			return err
-		} else if err := enc.WriteU64(writer, REDIRECT_FLOW_6_FOOTER_ID); err != nil {
+		if err := enc.WriteU64(writer, REDIRECT_FLOW_4_FOOTER_ID_OLD); err != nil {
 			return err
 		}
 	}
@@ -104,53 +72,55 @@ func (w *UdpFlow) WriteTo(writer io.Writer) error {
 	return nil
 }
 
-func FromTailUdpFlow(slice []byte) (*UdpFlow, uint64, error) {
+func FromTailUdpFlow(slice []byte) (UdpFlow, uint64, error) {
 	if len(slice) < 8 {
-		return nil, 0, fmt.Errorf("not space to footer")
+		return UdpFlow{}, 0, fmt.Errorf("not space to footer")
 	}
-	footer := binary.BigEndian.Uint64(slice[len(slice)-8:])
-	switch footer {
-	case REDIRECT_FLOW_4_FOOTER_ID | REDIRECT_FLOW_4_FOOTER_ID_OLD:
+
+	footer := binary.BigEndian.Uint64(slice[(len(slice)-8):])
+	if footer == REDIRECT_FLOW_4_FOOTER_ID || footer == REDIRECT_FLOW_4_FOOTER_ID_OLD || footer == (REDIRECT_FLOW_4_FOOTER_ID | REDIRECT_FLOW_4_FOOTER_ID_OLD) {
 		if len(slice) < V4_LEN {
-			return nil, 0, fmt.Errorf("v4 not have space")
+			return UdpFlow{}, 0, fmt.Errorf("v4 not have space")
 		}
-		slice = slice[len(slice)-V4_LEN:]
-		src_ip, _ := enc.ReadByteN(bytes.NewReader(slice), 4)
-		srcIP, _ := netip.AddrFromSlice(src_ip)
-		dst_ip, _ := enc.ReadByteN(bytes.NewReader(slice), 4)
-		dstIP, _ := netip.AddrFromSlice(dst_ip)
-		src_port, dst_port := enc.ReadU16(bytes.NewReader(slice)), enc.ReadU16(bytes.NewReader(slice))
+		reader := bytes.NewReader(slice[len(slice)-V4_LEN:])
 
-		return &UdpFlow{
-			V4: &UdpFlowBase{
-				Src: netip.AddrPortFrom(srcIP, src_port),
-				Dst: netip.AddrPortFrom(dstIP, dst_port),
-			},
-		}, 0, nil
-	case REDIRECT_FLOW_6_FOOTER_ID:
+		var err error
+		var src_ip, dst_ip []byte
+		if src_ip, err = enc.ReadByteN(reader, 4); err != nil {
+			return UdpFlow{}, 0, err
+		} else if dst_ip, err = enc.ReadByteN(reader, 4); err != nil {
+			return UdpFlow{}, 0, err
+		}
+		src_port, dst_port := enc.ReadU16(reader), enc.ReadU16(reader)
+		srcIP := netip.AddrFrom4([4]byte(src_ip))
+		dstIP := netip.AddrFrom4([4]byte(dst_ip))
+
+		var point UdpFlow
+		point.IPSrc = netip.AddrPortFrom(srcIP, src_port)
+		point.IPDst = netip.AddrPortFrom(dstIP, dst_port)
+		return point, 0, nil
+	} else if footer == REDIRECT_FLOW_6_FOOTER_ID {
 		if len(slice) < V6_LEN {
-			return nil, footer, fmt.Errorf("v6 not have space")
+			return UdpFlow{}, footer, fmt.Errorf("v6 not have space")
 		}
-		slice = slice[len(slice)-V6_LEN:]
-		src_ip, _ := enc.ReadByteN(bytes.NewReader(slice), 16)
-		srcIP, _ := netip.AddrFromSlice(src_ip)
-		dst_ip, _ := enc.ReadByteN(bytes.NewReader(slice), 16)
-		dstIP, _ := netip.AddrFromSlice(dst_ip)
-		src_port, dst_port := enc.ReadU16(bytes.NewReader(slice)), enc.ReadU16(bytes.NewReader(slice))
-		flow := enc.ReadU32(bytes.NewReader(slice))
+		reader := bytes.NewReader(slice[len(slice)-V4_LEN:])
 
-		return &UdpFlow{
-			V6: &struct {
-				UdpFlowBase
-				Flow uint32
-			}{
-				UdpFlowBase{
-					Src: netip.AddrPortFrom(srcIP, src_port),
-					Dst: netip.AddrPortFrom(dstIP, dst_port),
-				},
-				flow,
-			},
-		}, 0, nil
+		var err error
+		var src_ip, dst_ip []byte
+		if src_ip, err = enc.ReadByteN(reader, 16); err != nil {
+			return UdpFlow{}, 0, err
+		} else if dst_ip, err = enc.ReadByteN(reader, 16); err != nil {
+			return UdpFlow{}, 0, err
+		}
+		src_port, dst_port, flow := enc.ReadU16(reader), enc.ReadU16(reader), enc.ReadU32(reader)
+		srcIP := netip.AddrFrom16([16]byte(src_ip))
+		dstIP := netip.AddrFrom16([16]byte(dst_ip))
+
+		var point UdpFlow
+		point.IPSrc = netip.AddrPortFrom(srcIP, src_port)
+		point.IPDst = netip.AddrPortFrom(dstIP, dst_port)
+		point.Flow = flow
+		return point, 0, nil
 	}
-	return nil, footer, nil
+	return UdpFlow{}, footer, fmt.Errorf("read fotter")
 }

@@ -3,7 +3,6 @@ package tunnel
 import (
 	"bytes"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
@@ -137,8 +136,6 @@ func (self *ConnectedControl) Authenticate(Api api.Api) (AuthenticatedControl, e
 
 			if response := feed.Response; response != nil {
 				if response.RequestID != 10 {
-					d,_:=json.MarshalIndent(feed, "", "  ")
-					fmt.Printf("Setup: %s\n", string(d))
 					continue
 				}
 				if content := response.Content; content.RequestQueued {

@@ -3,6 +3,7 @@ package runner
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,7 @@ func NewTunnelRunner(Api api.Api, Lookup network.AddressLookup[netip.AddrPort]) 
 	if err := tunnel.Setup(); err != nil {
 		return TunnelRunner{}, err
 	}
-	udp_clients := network.NewUdpClients(tunnel.UdpTunnel(), Lookup)
+	udp_clients := network.NewUdpClients(*tunnel.UdpTunnel(), Lookup)
 	var keep atomic.Bool
 	keep.Store(true)
 	return TunnelRunner{
@@ -42,7 +43,7 @@ func (self *TunnelRunner) SetSpecialLan(setUse bool) {
 	self.UdpClients.UseSpecialLan = setUse
 }
 
-func (self *TunnelRunner) Run() {
+func (self *TunnelRunner) Run() chan error {
 	end := make(chan error)
 	tunnel := self.Tunnel
 	go func() {
@@ -54,33 +55,37 @@ func (self *TunnelRunner) Run() {
 				if _, err := tunnel.ReloadControlAddr(); err != nil {
 				}
 			}
-			fmt.Println("Reload")
+			fmt.Println("Reciving new connection")
 			if new_client := tunnel.Update(); new_client != nil {
 				fmt.Println("New TCP Client")
-				clients := self.TcpClients
 				found := self.Lookup.Lookup(new_client.ConnectAddr.Addr(), new_client.ConnectAddr.Port(), api.PortProto("tcp"))
 				if found == nil {
+					fmt.Println("could not find local address for connection")
 					continue
 				}
-				local_addr := netip.AddrPortFrom(found.Value.Addr(), (new_client.ConnectAddr.Port()-found.FromPort)+found.Value.Port())
 				go func() {
-					peerAddr := new_client.PeerAddr
-					tunnel_conn, err := clients.Connect(*new_client)
-					if err != nil {
+					var (
+						tunnel_conn *network.TcpClient
+						local_conn  *net.TCPConn
+						err         error
+					)
+
+					if tunnel_conn, err = self.TcpClients.Connect(*new_client); err != nil {
 						return
 					}
 					defer tunnel_conn.Stream.Close()
-					local_conn, err := network.TcpSocket(self.TcpClients.UseSpecialLAN, peerAddr, local_addr)
-					if err != nil {
+					defer tunnel_conn.Dropper.Drop()
 
+					if local_conn, err = network.TcpSocket(self.TcpClients.UseSpecialLAN, new_client.PeerAddr, netip.AddrPortFrom(found.Value.Addr(), (new_client.ConnectAddr.Port()-found.FromPort)+found.Value.Port())); err != nil {
+						return
 					}
 					defer local_conn.Close()
 					done := make(chan struct{})
+					defer close(done)
 					go func() {
 						io.Copy(&tunnel_conn.Stream, local_conn)
 						done <- struct{}{}
 					}()
-
 					go func() {
 						io.Copy(local_conn, &tunnel_conn.Stream)
 						done <- struct{}{}
@@ -92,25 +97,27 @@ func (self *TunnelRunner) Run() {
 		}
 	}()
 
-	// udp_clients := self.UdpClients
 	// go func(){
-	// 	buffer := make([]byte, 2048)
-	// 	// had_success := false
+	// 	udp := tunnel.UdpTunnel()
 	// 	for self.KeepRunning.Load() {
+	// 		buffer := make([]byte, 2048)
+	// 		fmt.Println("udp rec")
 	// 		rx, err := udp.ReceiveFrom(buffer)
-	// 		fmt.Println(rx)
 	// 		if err != nil {
+	// 			fmt.Println(err)
 	// 			time.Sleep(time.Second)
 	// 			continue
 	// 		}
 	// 		if rx.ConfirmerdConnection {
 	// 			continue
 	// 		}
+	// 		d,_:=json.MarshalIndent(rx, "", "  ")
+	// 		fmt.Printf("rx: %s\n", string(d))
 	// 		bytes, flow := rx.ReceivedPacket.Bytes, rx.ReceivedPacket.Flow
-	// 		if err := udp_clients.ForwardPacket(flow, buffer[:bytes]); err != nil {
+	// 		if err := self.UdpClients.ForwardPacket(flow, buffer[:bytes]); err != nil {
 	// 			panic(err)
 	// 		}
 	// 	}
 	// }()
-	<-end
+	return end
 }

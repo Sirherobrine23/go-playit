@@ -27,7 +27,7 @@ type SimpleTunnel struct {
 	api                                            api.Api
 	controlAddr                                    netip.AddrPort
 	controlChannel                                 AuthenticatedControl
-	udpTunnel                                      UdpTunnel
+	udpTunnel                                      *UdpTunnel
 	lastKeepAlive, lastPing, lastPong, lastUdpAuth time.Time
 	lastControlTargets                             []netip.AddrPort
 }
@@ -39,8 +39,8 @@ func NewSimpleTunnel(Api api.Api) SimpleTunnel {
 }
 
 func (self *SimpleTunnel) Setup() error {
-	udpTunnel := UdpTunnel{}
-	if err := AssignUdpTunnel(&udpTunnel); err != nil {
+	udpTunnel := new(UdpTunnel)
+	if err := AssignUdpTunnel(udpTunnel); err != nil {
 		return err
 	}
 
@@ -104,7 +104,7 @@ func (self *SimpleTunnel) UpdateControlAddr(connected ConnectedControl) (bool, e
 	return true, nil
 }
 
-func (self *SimpleTunnel) UdpTunnel() UdpTunnel {
+func (self *SimpleTunnel) UdpTunnel() *UdpTunnel {
 	return self.udpTunnel
 }
 
@@ -119,57 +119,62 @@ func (self *SimpleTunnel) Update() *proto.NewClient {
 	}
 
 	now := time.Now()
-	if now.UnixMilli() - self.lastPing.UnixMilli() > 1_000 {
+	if now.UnixMilli()-self.lastPing.UnixMilli() > 1_000 {
 		self.lastPing = now
-		if err := self.controlChannel.SendPing(200, now); err != nil {}
+		if err := self.controlChannel.SendPing(200, now); err != nil {
+		}
 	}
 	if self.udpTunnel.RequiresAuth() {
-		if 5_000 < now.UnixMilli() - self.lastUdpAuth.UnixMilli() {
+		if 5_000 < now.UnixMilli()-self.lastUdpAuth.UnixMilli() {
 			self.lastUdpAuth = now
-			if err := self.controlChannel.SendSetupUdpChannel(9_000); err != nil {}
+			if err := self.controlChannel.SendSetupUdpChannel(9_000); err != nil {
+			}
 		}
 	} else if self.udpTunnel.RequireResend() {
-		if 1_000 < now.UnixMilli() - self.lastUdpAuth.UnixMilli() {
+		if 1_000 < now.UnixMilli()-self.lastUdpAuth.UnixMilli() {
 			self.lastUdpAuth = now
-			if _, err := self.udpTunnel.ResendToken(); err != nil {}
+			if _, err := self.udpTunnel.ResendToken(); err != nil {
+			}
 		}
 	}
 
 	timeTillExpire := max(self.controlChannel.GetExpireAt().UnixMilli(), now.UnixMilli()) - now.UnixMilli()
-	if 10_000 < now.UnixMilli() - self.lastKeepAlive.UnixMilli() && timeTillExpire < 30_000 {
+	if 10_000 < now.UnixMilli()-self.lastKeepAlive.UnixMilli() && timeTillExpire < 30_000 {
 		self.lastKeepAlive = now
-		if err := self.controlChannel.SendKeepAlive(100); err != nil {}
-		if err := self.controlChannel.SendSetupUdpChannel(1); err != nil {}
+		if err := self.controlChannel.SendKeepAlive(100); err != nil {
+		}
+		if err := self.controlChannel.SendSetupUdpChannel(1); err != nil {
+		}
 	}
 
 	for range 30 {
 		feed, err := self.controlChannel.RecvFeedMsg()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Printf("Update: %s", err.Error())
 			continue
 		}
-		d,_:=json.MarshalIndent(feed, "", "  ")
-		fmt.Printf("SimTunne: %s\n", string(d))
+		d, _ := json.MarshalIndent(feed, "", "  ")
+		fmt.Println(string(d))
 		if newClient := feed.NewClient; newClient != nil {
 			return newClient
 		} else if msg := feed.Response; msg != nil {
 			if content := msg.Content; content != nil {
 				if details := content.UdpChannelDetails; details != nil {
-					if err := self.udpTunnel.SetUdpTunnel(*details); err != nil {
+					if err := self.udpTunnel.SetUdpTunnel(details); err != nil {
 						panic(err)
 					}
 				} else if content.Unauthorized {
 					self.controlChannel.SetExpired()
 				} else if pong := content.Pong; pong != nil {
 					self.lastPong = time.Now()
-					if pong.ClientAddr.Compare(self.controlChannel.Conn.Pong.ClientAddr) != 0 {
-						fmt.Println("client ip changed", pong.ClientAddr.String(), self.controlChannel.Conn.Pong.ClientAddr.String())
-					}
+					// if pong.ClientAddr.Compare(self.controlChannel.Conn.Pong.ClientAddr) != 0 {
+					// 	fmt.Println("client ip changed", pong.ClientAddr.String(), self.controlChannel.Conn.Pong.ClientAddr.String())
+					// }
 				}
 			}
 		}
 	}
-	if self.lastPong.UnixMilli() != 0 && time.Now().UnixMilli() - self.lastPong.UnixMilli() > 6_000 {
+	if self.lastPong.UnixMilli() != 0 && time.Now().UnixMilli()-self.lastPong.UnixMilli() > 6_000 {
 		self.lastPong = time.UnixMilli(0)
 		self.controlChannel.SetExpired()
 	}

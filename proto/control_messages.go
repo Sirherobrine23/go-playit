@@ -386,9 +386,6 @@ func (pong *Pong) ReadFrom(r io.Reader) error {
 	} else if err := enc.ReadOption(r, func(r io.Reader) (err error) {
 		pong.SessionExpireAt = new(time.Time)
 		*pong.SessionExpireAt = time.UnixMilli(enc.Read64(r)) // Fix set SessionExpireAt
-		// expAt := time.UnixMilli(enc.Read64(r)) // Fix set SessionExpireAt
-		// fmt.Printf("pong.SessionExpireAt: %s\n", expAt.String())
-		// pong.SessionExpireAt = &expAt
 		return nil
 	}); err != nil {
 		return err

@@ -82,26 +82,26 @@ func (udp *UdpTunnel) RequiresAuth() bool {
 	return 5 < now_sec()-lastSend
 }
 
-func (udp *UdpTunnel) SetUdpTunnel(details proto.UdpChannelDetails) error {
+func (udp *UdpTunnel) SetUdpTunnel(details *proto.UdpChannelDetails) error {
 	// LogDebug.Println("Updating Udp Tunnel")
-	{
-		udp.locker.Lock()
-		if current := udp.Details.Udp; current != nil {
-			if bytes.Equal(current.Token, details.Token) && current.TunnelAddr.Compare(details.TunnelAddr) == 0 {
-				udp.locker.Unlock()
-				return nil
-			}
-			if current.TunnelAddr.Compare(details.TunnelAddr) != 0 {
-				// LogDebug.Println("changed udp tunner addr")
-				oldAddr := current.TunnelAddr
-				udp.Details.AddrHistory = append(udp.Details.AddrHistory, oldAddr)
-			}
+	udp.locker.Lock()
+	if current := udp.Details.Udp; current != nil {
+		if bytes.Equal(current.Token, details.Token) && current.TunnelAddr.Compare(details.TunnelAddr) == 0 {
+			udp.locker.Unlock()
+			return nil
 		}
-		udp.Details.Udp = &details
-		udp.locker.Unlock()
+		if current.TunnelAddr.Compare(details.TunnelAddr) != 0 {
+			// LogDebug.Println("changed udp tunner addr")
+			oldAddr := current.TunnelAddr
+			udp.Details.AddrHistory = append(udp.Details.AddrHistory, oldAddr)
+		}
 	}
+	udp.Details.Udp = new(proto.UdpChannelDetails)
+	udp.Details.Udp.Token = details.Token
+	udp.Details.Udp.TunnelAddr = details.TunnelAddr
+	udp.locker.Unlock()
 
-	return udp.SendToken(&details)
+	return udp.SendToken(details)
 }
 
 func (udp *UdpTunnel) ResendToken() (bool, error) {
@@ -175,12 +175,13 @@ func (Udp *UdpTunnel) GetToken() ([]byte, error) {
 	return lock.Udp.Token[:], nil
 }
 
+type UdpTunnelRxPacket struct {
+	Bytes uint64
+	Flow  UdpFlow
+}
 type UdpTunnelRx struct {
 	ConfirmerdConnection bool
-	ReceivedPacket       *struct {
-		Bytes uint64
-		Flow  UdpFlow
-	}
+	ReceivedPacket       UdpTunnelRxPacket
 }
 
 func (Udp *UdpTunnel) ReceiveFrom(buff []byte) (*UdpTunnelRx, error) {
@@ -191,6 +192,8 @@ func (Udp *UdpTunnel) ReceiveFrom(buff []byte) (*UdpTunnelRx, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// udp.SetReadDeadline(time.Now().Add(time.Second * 2))
 	byteSize, remote, err := udp.ReadFromUDPAddrPort(buff)
 	if err != nil {
 		return nil, err
@@ -203,36 +206,34 @@ func (Udp *UdpTunnel) ReceiveFrom(buff []byte) (*UdpTunnelRx, error) {
 			return nil, fmt.Errorf("got data from other source")
 		}
 	}
+	buff = buff[:byteSize]
 	token, err := Udp.GetToken()
 	if err != nil {
 		return nil, err
 	}
 
-	// LogDebug.Println("Check token")
-	// LogDebug.Println(buff)
-	// LogDebug.Println(token)
-	// LogDebug.Println("end check token")
-	if bytes.Equal(buff[:byteSize], token) {
+	var point UdpTunnelRx
+	if bytes.Equal(buff, token) {
 		// LogDebug.Println("udp session confirmed")
 		Udp.LastConfirm.Store(now_sec())
-		return &UdpTunnelRx{ConfirmerdConnection: true}, nil
-	}
-
-	if len(buff)+V6_LEN < byteSize {
+		point.ConfirmerdConnection = true
+		return &point, nil
+	} else if len(buff)+V6_LEN < byteSize {
 		return nil, fmt.Errorf("receive buffer too small")
 	}
 
-	footer, footerInt, err := FromTailUdpFlow(buff[byteSize:])
+	footer, footerInt, err := FromTailUdpFlow(buff)
 	if err != nil {
 		if footerInt == UDP_CHANNEL_ESTABLISH_ID {
-			actual := hex.EncodeToString(buff[byteSize:])
+			actual := hex.EncodeToString(buff)
 			expected := hex.EncodeToString(token)
 			return nil, fmt.Errorf("unexpected UDP establish packet, actual: %s, expected: %s", actual, expected)
 		}
-		return nil, fmt.Errorf("failed to extract udp footer: %s, err: %s", hex.EncodeToString(buff[byteSize:]), err.Error())
+		return nil, fmt.Errorf("failed to extract udp footer: %s, err: %s", hex.EncodeToString(buff), err.Error())
 	}
-	return &UdpTunnelRx{ReceivedPacket: &struct {
-		Bytes uint64
-		Flow  UdpFlow
-	}{uint64(byteSize) - uint64(footer.Len()), *footer}}, nil
+	point.ReceivedPacket = UdpTunnelRxPacket{
+		uint64(byteSize - footer.Len()),
+		footer,
+	}
+	return &point, nil
 }

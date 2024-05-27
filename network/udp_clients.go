@@ -105,7 +105,7 @@ func (self *UdpClients) ClientCount() int {
 
 func (self *UdpClients) ForwardPacket(Flow tunnel.UdpFlow, data []byte) error {
 	flowDst := Flow.Dst()
-	found := self.lookup.Lookup(flowDst.Addr(), Flow.Dst().Port(), api.PortProto("udp"))
+	found := self.lookup.Lookup(flowDst.Addr(), flowDst.Port(), api.PortProto("udp"))
 	if found == nil {
 		return fmt.Errorf("could not find tunnel")
 	}
@@ -116,8 +116,9 @@ func (self *UdpClients) ForwardPacket(Flow tunnel.UdpFlow, data []byte) error {
 			return client.SendLocal(flowDst.Port(), data)
 		}
 	}
-	self.udpClientsLocker.Lock()
+
 	defer self.udpClientsLocker.Unlock()
+	self.udpClientsLocker.Lock()
 
 	client, err := func() (*UdpClient, error) {
 		for kkey, client := range self.udpClients {
@@ -128,23 +129,18 @@ func (self *UdpClients) ForwardPacket(Flow tunnel.UdpFlow, data []byte) error {
 		localAddr := found.Value
 		var sendFlow tunnel.UdpFlow
 		var clientAddr netip.AddrPort
-		if Flow.V4 != nil {
-			clientAddr = netip.AddrPortFrom(Flow.V4.Src.Addr(), Flow.V4.Src.Port())
-			sendFlow.V4 = &tunnel.UdpFlowBase{
-				Src: netip.AddrPortFrom(Flow.V4.Dst.Addr(), found.FromPort),
-				Dst: Flow.Src(),
+		if Flow.IPSrc.Addr().Is4() {
+			clientAddr = netip.AddrPortFrom(Flow.IPSrc.Addr(), Flow.IPSrc.Port())
+			sendFlow = tunnel.UdpFlow{
+				IPSrc: netip.AddrPortFrom(Flow.IPDst.Addr(), found.FromPort),
+				IPDst: Flow.Src(),
 			}
 		} else {
-			clientAddr = netip.AddrPortFrom(Flow.V6.Src.Addr(), Flow.V6.Src.Port())
-			sendFlow.V6 = &struct {
-				tunnel.UdpFlowBase
-				Flow uint32
-			}{
-				Flow: sendFlow.V6.Flow,
-				UdpFlowBase: tunnel.UdpFlowBase{
-					Src: netip.AddrPortFrom(Flow.V6.Dst.Addr(), found.FromPort),
-					Dst: Flow.Src(),
-				},
+			clientAddr = netip.AddrPortFrom(Flow.IPSrc.Addr(), Flow.IPSrc.Port())
+			sendFlow = tunnel.UdpFlow{
+				IPSrc: netip.AddrPortFrom(Flow.IPDst.Addr(), found.FromPort),
+				IPDst: Flow.Src(),
+				Flow: sendFlow.Flow,
 			}
 		}
 
