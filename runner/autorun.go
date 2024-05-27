@@ -24,8 +24,8 @@ type LocalLookup struct {
 }
 
 func (look *LocalLookup) Lookup(IP netip.Addr, Port uint16, Proto api.PortProto) *network.AddressValue[netip.AddrPort] {
-	look.AdreessLock.Lock()
-	defer look.AdreessLock.Unlock()
+	// look.AdreessLock.Lock()
+	// defer look.AdreessLock.Unlock()
 	for _, tunnel := range look.Adreess {
 		if tunnel.PortType != Proto && tunnel.PortType != "both" {
 			continue

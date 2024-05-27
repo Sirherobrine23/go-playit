@@ -84,10 +84,10 @@ func (udp *UdpTunnel) RequiresAuth() bool {
 
 func (udp *UdpTunnel) SetUdpTunnel(details *proto.UdpChannelDetails) error {
 	// LogDebug.Println("Updating Udp Tunnel")
-	udp.locker.Lock()
+	// udp.locker.Lock()
 	if current := udp.Details.Udp; current != nil {
 		if bytes.Equal(current.Token, details.Token) && current.TunnelAddr.Compare(details.TunnelAddr) == 0 {
-			udp.locker.Unlock()
+			// udp.locker.Unlock()
 			return nil
 		}
 		if current.TunnelAddr.Compare(details.TunnelAddr) != 0 {
@@ -99,7 +99,7 @@ func (udp *UdpTunnel) SetUdpTunnel(details *proto.UdpChannelDetails) error {
 	udp.Details.Udp = new(proto.UdpChannelDetails)
 	udp.Details.Udp.Token = details.Token
 	udp.Details.Udp.TunnelAddr = details.TunnelAddr
-	udp.locker.Unlock()
+	// udp.locker.Unlock()
 
 	return udp.SendToken(details)
 }
@@ -115,8 +115,8 @@ func (udp *UdpTunnel) ResendToken() (bool, error) {
 }
 
 func (udp *UdpTunnel) SendToken(details *proto.UdpChannelDetails) error {
-	udp.locker.RLock()
-	defer udp.locker.RUnlock()
+	// udp.locker.RLock()
+	// defer udp.locker.RUnlock()
 	if details.TunnelAddr.Addr().Is4() {
 		if _, err := udp.Udp4.WriteToUDPAddrPort(details.Token, details.TunnelAddr); err != nil {
 			return err
@@ -135,8 +135,8 @@ func (udp *UdpTunnel) SendToken(details *proto.UdpChannelDetails) error {
 }
 
 func (udp *UdpTunnel) GetSock() (*net.UDPConn, *netip.AddrPort, error) {
-	udp.locker.RLock()
-	defer udp.locker.RUnlock()
+	// udp.locker.RLock()
+	// defer udp.locker.RUnlock()
 
 	lock := udp.Details
 	if lock.Udp == nil {
@@ -166,8 +166,8 @@ func (Udp *UdpTunnel) Send(data []byte, Flow UdpFlow) (int, error) {
 }
 
 func (Udp *UdpTunnel) GetToken() ([]byte, error) {
-	Udp.locker.RLock()
-	defer Udp.locker.RUnlock()
+	// Udp.locker.RLock()
+	// defer Udp.locker.RUnlock()
 	lock := Udp.Details
 	if lock.Udp == nil {
 		return nil, fmt.Errorf("udp tunnel not connected")
@@ -185,8 +185,8 @@ type UdpTunnelRx struct {
 }
 
 func (Udp *UdpTunnel) ReceiveFrom(buff []byte) (*UdpTunnelRx, error) {
-	Udp.locker.RLock()
-	defer Udp.locker.RUnlock()
+	// Udp.locker.RLock()
+	// defer Udp.locker.RUnlock()
 
 	udp, tunnelAddr, err := Udp.GetSock()
 	if err != nil {

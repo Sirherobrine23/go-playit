@@ -53,13 +53,14 @@ func (self *TunnelRunner) Run() chan error {
 			if 30_000 < time.Now().UnixMilli()-lastControlUpdate {
 				lastControlUpdate = now
 				if _, err := tunnel.ReloadControlAddr(); err != nil {
+					<-time.After(time.Second * 3)
+					continue
 				}
 			}
-			fmt.Println("Reciving new connection")
 			if new_client := tunnel.Update(); new_client != nil {
 				fmt.Println("New TCP Client")
-				found := self.Lookup.Lookup(new_client.ConnectAddr.Addr(), new_client.ConnectAddr.Port(), api.PortProto("tcp"))
-				if found == nil {
+				var found *network.AddressValue[netip.AddrPort]
+				if found = self.Lookup.Lookup(new_client.ConnectAddr.Addr(), new_client.ConnectAddr.Port(), api.PortProto("tcp")); found == nil {
 					fmt.Println("could not find local address for connection")
 					continue
 				}
@@ -77,6 +78,7 @@ func (self *TunnelRunner) Run() chan error {
 					defer tunnel_conn.Dropper.Drop()
 
 					if local_conn, err = network.TcpSocket(self.TcpClients.UseSpecialLAN, new_client.PeerAddr, netip.AddrPortFrom(found.Value.Addr(), (new_client.ConnectAddr.Port()-found.FromPort)+found.Value.Port())); err != nil {
+						fmt.Println(err)
 						return
 					}
 					defer local_conn.Close()
@@ -95,29 +97,28 @@ func (self *TunnelRunner) Run() chan error {
 				}()
 			}
 		}
+		end <- nil
 	}()
 
-	// go func(){
-	// 	udp := tunnel.UdpTunnel()
-	// 	for self.KeepRunning.Load() {
-	// 		buffer := make([]byte, 2048)
-	// 		fmt.Println("udp rec")
-	// 		rx, err := udp.ReceiveFrom(buffer)
-	// 		if err != nil {
-	// 			fmt.Println(err)
-	// 			time.Sleep(time.Second)
-	// 			continue
-	// 		}
-	// 		if rx.ConfirmerdConnection {
-	// 			continue
-	// 		}
-	// 		d,_:=json.MarshalIndent(rx, "", "  ")
-	// 		fmt.Printf("rx: %s\n", string(d))
-	// 		bytes, flow := rx.ReceivedPacket.Bytes, rx.ReceivedPacket.Flow
-	// 		if err := self.UdpClients.ForwardPacket(flow, buffer[:bytes]); err != nil {
-	// 			panic(err)
-	// 		}
-	// 	}
-	// }()
+	go func() {
+		udp := tunnel.UdpTunnel()
+		for self.KeepRunning.Load() {
+			buffer := make([]byte, 2048)
+			fmt.Println("udp rec")
+			rx, err := udp.ReceiveFrom(buffer)
+			if err != nil {
+				fmt.Println(err)
+				time.Sleep(time.Second)
+				continue
+			}
+			if rx.ConfirmerdConnection {
+				continue
+			}
+			bytes, flow := rx.ReceivedPacket.Bytes, rx.ReceivedPacket.Flow
+			if err := self.UdpClients.ForwardPacket(flow, buffer[:bytes]); err != nil {
+				panic(err)
+			}
+		}
+	}()
 	return end
 }

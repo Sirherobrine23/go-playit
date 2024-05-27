@@ -163,6 +163,7 @@ func (self *SimpleTunnel) Update() *proto.NewClient {
 					if err := self.udpTunnel.SetUdpTunnel(details); err != nil {
 						panic(err)
 					}
+					return self.Update()
 				} else if content.Unauthorized {
 					self.controlChannel.SetExpired()
 				} else if pong := content.Pong; pong != nil {
