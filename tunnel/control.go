@@ -20,29 +20,38 @@ type AuthenticatedControl struct {
 	CurrentPing *uint32
 }
 
-func (self *AuthenticatedControl) SendKeepAlive(requestId uint64) error {
-	return self.Send(proto.ControlRpcMessage[*proto.ControlRequest]{
-		requestId,
-		&proto.ControlRequest{
-			AgentKeepAlive: &self.Registered.Id,
+func (control *AuthenticatedControl) SendKeepAlive(requestID uint64) error {
+	return control.Send(proto.ControlRpcMessage[*proto.ControlRequest]{
+		RequestID: requestID,
+		Content: &proto.ControlRequest{
+			AgentKeepAlive: &control.Registered.Id,
 		},
 	})
 }
 
 func (self *AuthenticatedControl) SendSetupUdpChannel(requestId uint64) error {
 	return self.Send(proto.ControlRpcMessage[*proto.ControlRequest]{
-		requestId,
-		&proto.ControlRequest{
+		RequestID: requestId,
+		Content: &proto.ControlRequest{
 			SetupUdpChannel: &self.Registered.Id,
 		},
 	})
 }
 
-func (self *AuthenticatedControl) SendPing(requestId uint64, Now time.Time) error {
-	return self.Send(proto.ControlRpcMessage[*proto.ControlRequest]{
-		requestId,
-		&proto.ControlRequest{
-			Ping: &proto.Ping{Now, self.CurrentPing, &self.Registered.Id},
+func (control *AuthenticatedControl) SetupUdpChannel(requestID uint64) error {
+	return control.Send(proto.ControlRpcMessage[*proto.ControlRequest]{
+		RequestID: requestID,
+		Content: &proto.ControlRequest{
+			SetupUdpChannel: &control.Registered.Id,
+		},
+	})
+}
+
+func (control *AuthenticatedControl) Ping(requestID uint64, Now time.Time) error {
+	return control.Send(proto.ControlRpcMessage[*proto.ControlRequest]{
+		RequestID: requestID,
+		Content: &proto.ControlRequest{
+			Ping: &proto.Ping{Now: Now, CurrentPing: control.CurrentPing, SessionId: &control.Registered.Id},
 		},
 	})
 }
@@ -76,8 +85,8 @@ func (self *AuthenticatedControl) Send(req proto.ControlRpcMessage[*proto.Contro
 func (self *AuthenticatedControl) IntoRequireAuth() ConnectedControl {
 	return ConnectedControl{
 		ControlAddr: self.Conn.ControlAddr,
-		Udp: self.Conn.Udp,
-		Pong: self.LastPong,
+		Udp:         self.Conn.Udp,
+		Pong:        self.LastPong,
 	}
 }
 
@@ -88,10 +97,13 @@ func (self *AuthenticatedControl) Authenticate() (AuthenticatedControl, error) {
 
 func (self *AuthenticatedControl) RecvFeedMsg() (proto.ControlFeed, error) {
 	buff := make([]byte, 1024)
-	// self.Conn.Udp.SetReadDeadline(*new(time.Time))
-	self.Conn.Udp.SetReadDeadline(*new(time.Time)) // Remove deadline
+	// self.Conn.Udp.SetReadDeadline(*new(time.Time)) // Remove deadline
+	self.Conn.Udp.SetReadDeadline(time.Now().Add(time.Microsecond * 5))
 	size, remote, err := self.Conn.Udp.ReadFromUDPAddrPort(buff)
 	if err != nil {
+		if et, is := err.(net.Error); is && !et.Timeout() {
+			debug.Printf("control reader UDP control: %s", err.Error())
+		}
 		return proto.ControlFeed{}, err
 	} else if remote.Compare(self.Conn.ControlAddr) != 0 {
 		return proto.ControlFeed{}, fmt.Errorf("invalid remote, expected %q got %q", remote.String(), self.Conn.ControlAddr.String())
@@ -100,6 +112,7 @@ func (self *AuthenticatedControl) RecvFeedMsg() (proto.ControlFeed, error) {
 	self.buffer.Write(buff[:size])
 	feed := proto.ControlFeed{}
 	if err := feed.ReadFrom(self.buffer); err != nil {
+		debug.Printf("control feed reader: %s", err.Error())
 		return proto.ControlFeed{}, err
 	}
 	if res := feed.Response; res != nil {

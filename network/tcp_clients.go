@@ -89,10 +89,10 @@ func (tcp *TcpClients) Connect(newClient proto.NewClient) (*TcpClient, error) {
 		return nil, err
 	}
 
-	return &TcpClient{*stream, *droppe}, nil
+	return &TcpClient{stream, droppe}, nil
 }
 
 type TcpClient struct {
-	Stream  net.TCPConn
-	Dropper Dropper
+	Stream  *net.TCPConn
+	Dropper *Dropper
 }

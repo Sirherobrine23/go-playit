@@ -1,8 +1,13 @@
 package api
 
 import (
+	"log"
+	"os"
 	"runtime"
 )
+
+var NullFile, _ = os.Open(os.DevNull)
+var debug = log.New(NullFile, "api.playit.gg: ", log.Ldate)
 
 const (
 	GoPlayitVersion string = "0.17.1"
@@ -58,11 +63,13 @@ type Api struct {
 }
 
 type PortProto string
+
 func (proto PortProto) IsValid() bool {
 	switch proto {
 	case PortProto(PortTypeBoth):
 	case PortProto(PortTypeTcp):
-	case PortProto(PortTypeUdp): return true
+	case PortProto(PortTypeUdp):
+		return true
 	}
 	return false
 }
@@ -77,15 +84,23 @@ func (proto PortProto) SetUdp() {
 }
 
 type Platform string
+
 func (Platform Platform) Host() {
 	switch runtime.GOOS {
-	case "linux": Platform = "linux";
-	case "freebsd": Platform = "freebsd";
-	case "windows": Platform = "windows";
-	case "darwin": Platform = "macos";
-	case "android": Platform = "android";
-	case "ios": Platform = "ios";
-	default: Platform = "unknown";
+	case "linux":
+		Platform = "linux"
+	case "freebsd":
+		Platform = "freebsd"
+	case "windows":
+		Platform = "windows"
+	case "darwin":
+		Platform = "macos"
+	case "android":
+		Platform = "android"
+	case "ios":
+		Platform = "ios"
+	default:
+		Platform = "unknown"
 	}
 }
 func (Platform Platform) Linux() {

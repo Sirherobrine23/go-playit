@@ -17,6 +17,18 @@ func recodeJson(from, to any) error {
 	return nil
 }
 
+func prettyJSON(from string) string {
+	var data any
+	if err := json.Unmarshal([]byte(from), &data); err != nil {
+		return from
+	}
+	marData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return from
+	}
+	return string(marData)
+}
+
 func (w *Api) requestToApi(Path string, Body io.Reader, Response any, Headers map[string]string) (*http.Response, error) {
 	req, err := http.NewRequest("POST", fmt.Sprintf("%s%s", PlayitAPI, Path), Body)
 	if err != nil {
@@ -38,16 +50,24 @@ func (w *Api) requestToApi(Path string, Body io.Reader, Response any, Headers ma
 		return nil, err
 	}
 	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return res, err
+	}
+	debug.Printf("(%q %d): %s\n", Path, res.StatusCode, prettyJSON(string(data)))
 
 	var ResBody struct {
+		Error  string `json:"error"`
 		Status string `json:"status"`
 		Data   any    `json:"data"`
 	}
-	if err = json.NewDecoder(res.Body).Decode(&ResBody); err != nil {
+	if err = json.Unmarshal(data, &ResBody); err != nil {
 		return res, err
 	}
 	if res.StatusCode >= 300 {
-		defer res.Body.Close()
+		if ResBody.Error != "" {
+			return res, fmt.Errorf("api.playit.gg: %s", ResBody.Error)
+		}
 		var errStatus struct {
 			Type    string `json:"type"`
 			Message string `json:"message"`

@@ -12,6 +12,7 @@ type TcpTunnel struct {
 }
 
 func (tcpTunnel *TcpTunnel) Connect() (*net.TCPConn, error) {
+	debug.Printf("Conecting to %q\n", tcpTunnel.ClaimInstruction.Address.String())
 	conn, err := net.DialTCP("tcp", nil, net.TCPAddrFromAddrPort(tcpTunnel.ClaimInstruction.Address))
 	if err != nil {
 		if conn != nil {

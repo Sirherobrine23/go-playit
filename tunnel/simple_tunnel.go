@@ -1,8 +1,7 @@
 package tunnel
 
 import (
-	"encoding/json"
-	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"time"
@@ -26,7 +25,7 @@ func getControlAddresses(api api.Api) ([]netip.AddrPort, error) {
 type SimpleTunnel struct {
 	api                                            api.Api
 	controlAddr                                    netip.AddrPort
-	controlChannel                                 AuthenticatedControl
+	ControlChannel                                 AuthenticatedControl
 	udpTunnel                                      *UdpTunnel
 	lastKeepAlive, lastPing, lastPong, lastUdpAuth time.Time
 	lastControlTargets                             []netip.AddrPort
@@ -60,7 +59,7 @@ func (self *SimpleTunnel) Setup() error {
 
 	self.lastControlTargets = addresses
 	self.controlAddr = setup.ControlAddr
-	self.controlChannel = controlChannel
+	self.ControlChannel = controlChannel
 	self.udpTunnel = udpTunnel
 	self.lastKeepAlive = time.UnixMilli(0)
 	self.lastPing = time.UnixMilli(0)
@@ -97,7 +96,7 @@ func (self *SimpleTunnel) UpdateControlAddr(connected ConnectedControl) (bool, e
 	if err != nil {
 		return false, err
 	}
-	self.controlChannel = controlChannel
+	self.ControlChannel = controlChannel
 	self.controlAddr = newControlAddr
 	self.lastPing, self.lastKeepAlive, self.lastUdpAuth = time.UnixMilli(0), time.UnixMilli(0), time.UnixMilli(0)
 	self.udpTunnel.InvalidateSession()
@@ -108,76 +107,85 @@ func (self *SimpleTunnel) UdpTunnel() *UdpTunnel {
 	return self.udpTunnel
 }
 
-func (self *SimpleTunnel) Update() *proto.NewClient {
-	if self.controlChannel.IsExpired() {
-		auth, err := self.controlChannel.Authenticate()
+func (self *SimpleTunnel) Update() (*proto.NewClient, error) {
+	if self.ControlChannel.IsExpired() {
+		auth, err := self.ControlChannel.Authenticate()
 		if err != nil {
 			time.Sleep(time.Second * 2)
-			return nil
+			return nil, err
 		}
-		self.controlChannel = auth
+		self.ControlChannel = auth
 	}
 
 	now := time.Now()
 	if now.UnixMilli()-self.lastPing.UnixMilli() > 1_000 {
 		self.lastPing = now
-		if err := self.controlChannel.SendPing(200, now); err != nil {
+		if err := self.ControlChannel.Ping(200, now); err != nil {
+			debug.Printf("Update: %s\n", err.Error())
+			return nil, err
 		}
 	}
+
 	if self.udpTunnel.RequiresAuth() {
 		if 5_000 < now.UnixMilli()-self.lastUdpAuth.UnixMilli() {
 			self.lastUdpAuth = now
-			if err := self.controlChannel.SendSetupUdpChannel(9_000); err != nil {
+			if err := self.ControlChannel.SetupUdpChannel(9_000); err != nil {
+				debug.Printf("Update: %s\n", err.Error())
+				return nil, err
 			}
 		}
 	} else if self.udpTunnel.RequireResend() {
 		if 1_000 < now.UnixMilli()-self.lastUdpAuth.UnixMilli() {
 			self.lastUdpAuth = now
 			if _, err := self.udpTunnel.ResendToken(); err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	timeTillExpire := max(self.controlChannel.GetExpireAt().UnixMilli(), now.UnixMilli()) - now.UnixMilli()
+	timeTillExpire := max(self.ControlChannel.GetExpireAt().UnixMilli(), now.UnixMilli()) - now.UnixMilli()
 	if 10_000 < now.UnixMilli()-self.lastKeepAlive.UnixMilli() && timeTillExpire < 30_000 {
 		self.lastKeepAlive = now
-		if err := self.controlChannel.SendKeepAlive(100); err != nil {
-		}
-		if err := self.controlChannel.SendSetupUdpChannel(1); err != nil {
+		if err := self.ControlChannel.SendKeepAlive(100); err != nil {
+			return nil, err
+		} else if err := self.ControlChannel.SendSetupUdpChannel(1); err != nil {
+			return nil, err
 		}
 	}
 
-	for range 30 {
-		feed, err := self.controlChannel.RecvFeedMsg()
+	for range 80 {
+		feed, err := self.ControlChannel.RecvFeedMsg()
 		if err != nil {
-			fmt.Printf("Update: %s", err.Error())
+			if es, is := err.(net.Error); is && !es.Timeout() {
+				debug.Printf("RecvFeedMsg error: %s\n", err.Error())
+				return nil, err
+			}
 			continue
 		}
-		d, _ := json.MarshalIndent(feed, "", "  ")
-		fmt.Println(string(d))
 		if newClient := feed.NewClient; newClient != nil {
-			return newClient
+			return newClient, nil
 		} else if msg := feed.Response; msg != nil {
 			if content := msg.Content; content != nil {
 				if details := content.UdpChannelDetails; details != nil {
 					if err := self.udpTunnel.SetUdpTunnel(details); err != nil {
-						panic(err)
+						debug.Printf("Control Recive Message error: %s\n", err.Error())
+						return nil, err
 					}
 					return self.Update()
 				} else if content.Unauthorized {
-					self.controlChannel.SetExpired()
+					self.ControlChannel.SetExpired()
 				} else if pong := content.Pong; pong != nil {
 					self.lastPong = time.Now()
-					// if pong.ClientAddr.Compare(self.controlChannel.Conn.Pong.ClientAddr) != 0 {
-					// 	fmt.Println("client ip changed", pong.ClientAddr.String(), self.controlChannel.Conn.Pong.ClientAddr.String())
-					// }
+					if pong.ClientAddr.Compare(self.ControlChannel.Conn.Pong.ClientAddr) != 0 {
+						debug.Println("client ip changed", pong.ClientAddr.String(), self.ControlChannel.Conn.Pong.ClientAddr.String())
+					}
 				}
 			}
 		}
 	}
 	if self.lastPong.UnixMilli() != 0 && time.Now().UnixMilli()-self.lastPong.UnixMilli() > 6_000 {
-		self.lastPong = time.UnixMilli(0)
-		self.controlChannel.SetExpired()
+		self.lastPong = *new(time.Time)
+		self.ControlChannel.SetExpired()
 	}
-	return nil
+	return nil, nil
 }

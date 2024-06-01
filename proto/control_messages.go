@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"sirherobrine23.org/playit-cloud/go-playit/enc"
+	"sirherobrine23.org/playit-cloud/go-playit/logfile"
 )
 
 type ControlRequest struct {
@@ -19,53 +20,65 @@ type ControlRequest struct {
 }
 
 func (Control *ControlRequest) WriteTo(w io.Writer) error {
+	defer debug.Printf("Write ControlRequest: %s\n", logfile.JSONString(Control))
 	if Control.Ping != nil {
 		if err := enc.WriteU32(w, 6); err != nil {
+			debug.Printf("Write ControlRequest error: %s\n", err.Error())
 			return err
 		}
 		return Control.Ping.WriteTo(w)
 	} else if Control.AgentRegister != nil {
 		if err := enc.WriteU32(w, 2); err != nil {
+			debug.Printf("Write ControlRequest error: %s\n", err.Error())
 			return err
 		}
 		return Control.AgentRegister.WriteTo(w)
 	} else if Control.AgentKeepAlive != nil {
 		if err := enc.WriteU32(w, 3); err != nil {
+			debug.Printf("Write ControlRequest error: %s\n", err.Error())
 			return err
 		}
 		return Control.AgentKeepAlive.WriteTo(w)
 	} else if Control.SetupUdpChannel != nil {
 		if err := enc.WriteU32(w, 4); err != nil {
+			debug.Printf("Write ControlRequest error: %s\n", err.Error())
 			return err
 		}
 		return Control.SetupUdpChannel.WriteTo(w)
 	} else if Control.AgentCheckPortMapping != nil {
 		if err := enc.WriteU32(w, 5); err != nil {
+			debug.Printf("Write ControlRequest error: %s\n", err.Error())
 			return err
 		}
 		return Control.AgentCheckPortMapping.WriteTo(w)
 	}
 	return fmt.Errorf("set ControlRequest")
 }
-func (Control *ControlRequest) ReadFrom(r io.Reader) error {
+func (Control *ControlRequest) ReadFrom(r io.Reader) (err error) {
 	switch enc.ReadU32(r) {
 	case 1:
 		Control.Ping = new(Ping)
-		return Control.Ping.ReadFrom(r)
+		err = Control.Ping.ReadFrom(r)
 	case 2:
 		Control.AgentRegister = new(AgentRegister)
-		return Control.AgentRegister.ReadFrom(r)
+		err = Control.AgentRegister.ReadFrom(r)
 	case 3:
 		Control.AgentKeepAlive = new(AgentSessionId)
-		return Control.AgentKeepAlive.ReadFrom(r)
+		err = Control.AgentKeepAlive.ReadFrom(r)
 	case 4:
 		Control.SetupUdpChannel = new(AgentSessionId)
-		return Control.SetupUdpChannel.ReadFrom(r)
+		err = Control.SetupUdpChannel.ReadFrom(r)
 	case 5:
 		Control.AgentCheckPortMapping = new(AgentCheckPortMapping)
-		return Control.AgentCheckPortMapping.ReadFrom(r)
+		err = Control.AgentCheckPortMapping.ReadFrom(r)
+	default:
+		err = fmt.Errorf("invalid ControlRequest id")
 	}
-	return fmt.Errorf("invalid ControlRequest id")
+	debug.Printf("Read ControlRequest: %s\n", logfile.JSONString(Control))
+	if err != nil {
+		debug.Printf("Read ControlRequest error: %s\n", err.Error())
+	}
+	return
 }
 
 type AgentCheckPortMapping struct {
@@ -206,6 +219,7 @@ type ControlResponse struct {
 }
 
 func (Control *ControlResponse) WriteTo(w io.Writer) error {
+	defer debug.Printf("Write Feed: %s\n", logfile.JSONString(&Control))
 	if Control.Pong != nil {
 		if err := enc.WriteU32(w, 1); err != nil {
 			return err
@@ -237,34 +251,41 @@ func (Control *ControlResponse) WriteTo(w io.Writer) error {
 	}
 	return fmt.Errorf("insert any options to write")
 }
-func (Control *ControlResponse) ReadFrom(r io.Reader) error {
-	switch enc.ReadU32(r) {
+func (Control *ControlResponse) ReadFrom(r io.Reader) (err error) {
+	code := enc.ReadU32(r)
+	switch code {
 	case 1:
 		Control.Pong = new(Pong)
-		return Control.Pong.ReadFrom(r)
+		err = Control.Pong.ReadFrom(r)
 	case 2:
 		Control.InvalidSignature = true
-		return nil
+		err = nil
 	case 3:
 		Control.Unauthorized = true
-		return nil
+		err = nil
 	case 4:
 		Control.RequestQueued = true
-		return nil
+		err = nil
 	case 5:
 		Control.TryAgainLater = true
-		return nil
+		err = nil
 	case 6:
 		Control.AgentRegistered = new(AgentRegistered)
-		return Control.AgentRegistered.ReadFrom(r)
+		err = Control.AgentRegistered.ReadFrom(r)
 	case 7:
 		Control.AgentPortMapping = new(AgentPortMapping)
-		return Control.AgentPortMapping.ReadFrom(r)
+		err = Control.AgentPortMapping.ReadFrom(r)
 	case 8:
 		Control.UdpChannelDetails = new(UdpChannelDetails)
-		return Control.UdpChannelDetails.ReadFrom(r)
+		err = Control.UdpChannelDetails.ReadFrom(r)
+	default:
+		err = fmt.Errorf("invalid ControlResponse id")
 	}
-	return fmt.Errorf("invalid ControlResponse id")
+	debug.Printf("Read ControlResponse (Code %d): %s\n", code, logfile.JSONString(Control))
+	if err != nil {
+		debug.Printf("Read ControlResponse (Code %d) error: %s\n", code, err.Error())
+	}
+	return
 }
 
 type AgentPortMapping struct {

@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -9,6 +8,7 @@ import (
 	"time"
 
 	"sirherobrine23.org/playit-cloud/go-playit/api"
+	"sirherobrine23.org/playit-cloud/go-playit/logfile"
 	"sirherobrine23.org/playit-cloud/go-playit/network"
 	"sirherobrine23.org/playit-cloud/go-playit/tunnel"
 )
@@ -57,45 +57,53 @@ func (self *TunnelRunner) Run() chan error {
 					continue
 				}
 			}
-			if new_client := tunnel.Update(); new_client != nil {
-				fmt.Println("New TCP Client")
-				var found *network.AddressValue[netip.AddrPort]
-				if found = self.Lookup.Lookup(new_client.ConnectAddr.Addr(), new_client.ConnectAddr.Port(), api.PortProto("tcp")); found == nil {
-					fmt.Println("could not find local address for connection")
-					continue
-				}
-				go func() {
-					var (
-						tunnel_conn *network.TcpClient
-						local_conn  *net.TCPConn
-						err         error
-					)
-
-					if tunnel_conn, err = self.TcpClients.Connect(*new_client); err != nil {
-						return
-					}
-					defer tunnel_conn.Stream.Close()
-					defer tunnel_conn.Dropper.Drop()
-
-					if local_conn, err = network.TcpSocket(self.TcpClients.UseSpecialLAN, new_client.PeerAddr, netip.AddrPortFrom(found.Value.Addr(), (new_client.ConnectAddr.Port()-found.FromPort)+found.Value.Port())); err != nil {
-						fmt.Println(err)
-						return
-					}
-					defer local_conn.Close()
-					done := make(chan struct{})
-					defer close(done)
-					go func() {
-						io.Copy(&tunnel_conn.Stream, local_conn)
-						done <- struct{}{}
-					}()
-					go func() {
-						io.Copy(local_conn, &tunnel_conn.Stream)
-						done <- struct{}{}
-					}()
-					<-done
-					<-done
-				}()
+			new_client, err := tunnel.Update()
+			if err != nil {
+				debug.Printf("Error recived: %s\n", err.Error())
+				<-time.After(time.Second)
+				continue
+			} else if new_client == nil {
+				<-time.After(time.Second)
+				continue
 			}
+			debug.Println("New TCP Client")
+			var found *network.AddressValue[netip.AddrPort]
+			if found = self.Lookup.Lookup(new_client.ConnectAddr.Addr(), new_client.ConnectAddr.Port(), api.PortProto("tcp")); found == nil {
+				debug.Println("could not find local address for connection")
+				continue
+			}
+			go func() {
+				var (
+					tunnel_conn *network.TcpClient
+					local_conn  *net.TCPConn
+					err         error
+				)
+
+				if tunnel_conn, err = self.TcpClients.Connect(*new_client); err != nil {
+					return
+				}
+				if tunnel_conn.Stream != nil {
+					defer tunnel_conn.Stream.Close()
+				}
+
+				if local_conn, err = network.TcpSocket(self.TcpClients.UseSpecialLAN, new_client.PeerAddr, netip.AddrPortFrom(found.Value.Addr(), (new_client.ConnectAddr.Port()-found.FromPort)+found.Value.Port())); err != nil {
+					debug.Println(err)
+					return
+				}
+				defer local_conn.Close()
+				done := make(chan struct{})
+				defer close(done)
+				go func() {
+					io.Copy(tunnel_conn.Stream, local_conn)
+					done <- struct{}{}
+				}()
+				go func() {
+					io.Copy(local_conn, tunnel_conn.Stream)
+					done <- struct{}{}
+				}()
+				<-done
+				<-done
+			}()
 		}
 		end <- nil
 	}()
@@ -103,19 +111,19 @@ func (self *TunnelRunner) Run() chan error {
 	go func() {
 		udp := tunnel.UdpTunnel()
 		for self.KeepRunning.Load() {
-			buffer := make([]byte, 2048)
-			fmt.Println("udp rec")
-			rx, err := udp.ReceiveFrom(buffer)
+			buffer, rx, err := udp.ReceiveFrom()
 			if err != nil {
-				fmt.Println(err)
+				// if et, is := err.(net.Error); is && !et.Timeout() {
+				debug.Printf("UdpTunnel Error: %s\n", err.Error())
+				// }
 				time.Sleep(time.Second)
 				continue
 			}
+			debug.Printf("UdpTunnel: %s\n", logfile.JSONString(rx))
 			if rx.ConfirmerdConnection {
 				continue
-			}
-			bytes, flow := rx.ReceivedPacket.Bytes, rx.ReceivedPacket.Flow
-			if err := self.UdpClients.ForwardPacket(flow, buffer[:bytes]); err != nil {
+			} else if err := self.UdpClients.ForwardPacket(rx.ReceivedPacket.Flow, buffer); err != nil {
+				debug.Println(err)
 				panic(err)
 			}
 		}

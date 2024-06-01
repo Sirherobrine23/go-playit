@@ -6,6 +6,7 @@ import (
 	"net/netip"
 
 	"sirherobrine23.org/playit-cloud/go-playit/enc"
+	"sirherobrine23.org/playit-cloud/go-playit/logfile"
 )
 
 var (
@@ -17,19 +18,24 @@ type ControlFeed struct {
 	NewClient *NewClient
 }
 
-func (Feed *ControlFeed) ReadFrom(r io.Reader) error {
+func (Feed *ControlFeed) ReadFrom(r io.Reader) (err error) {
 	id := enc.ReadU32(r)
 	if id == 1 {
 		Feed.Response = new(ControlRpcMessage[*ControlResponse])
 		Feed.Response.Content = new(ControlResponse)
-		return Feed.Response.ReadFrom(r)
+		err = Feed.Response.ReadFrom(r)
+		debug.Printf("Read Feed (id %d): %s\n", id, logfile.JSONString(Feed))
 	} else if id == 2 {
 		Feed.NewClient = &NewClient{}
-		return Feed.NewClient.ReadFrom(r)
+		err = Feed.NewClient.ReadFrom(r)
+		debug.Printf("Read Feed (id %d): %s\n", id, logfile.JSONString(Feed))
+	} else {
+		err = ErrFeedRead
 	}
-	return ErrFeedRead
+	return
 }
 func (Feed *ControlFeed) WriteTo(w io.Writer) error {
+	defer debug.Printf("Write Feed: %s\n", logfile.JSONString(Feed))
 	if Feed.Response != nil {
 		if err := enc.WriteU32(w, 1); err != nil {
 			return err

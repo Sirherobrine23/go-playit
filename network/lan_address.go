@@ -73,5 +73,5 @@ func UdpSocket(SpecialLan bool, Peer, Host netip.AddrPort) (*net.UDPConn, error)
 		}
 		return stream, err
 	}
-	return net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(Host))
+	return net.ListenUDP("udp", nil)
 }

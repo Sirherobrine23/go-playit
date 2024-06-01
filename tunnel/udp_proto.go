@@ -73,15 +73,17 @@ func (w *UdpFlow) WriteTo(writer io.Writer) error {
 }
 
 func FromTailUdpFlow(slice []byte) (UdpFlow, uint64, error) {
+	debug.Printf("FromTailUdpFlow: Avaible bytes: %+v\n", slice)
 	if len(slice) < 8 {
 		return UdpFlow{}, 0, fmt.Errorf("not space to footer")
 	}
-
 	footer := binary.BigEndian.Uint64(slice[(len(slice)-8):])
+	debug.Printf("FromTailUdpFlow: Footer %d, bytes: %+v\n", footer, slice[(len(slice)-8):])
 	if footer == REDIRECT_FLOW_4_FOOTER_ID || footer == REDIRECT_FLOW_4_FOOTER_ID_OLD || footer == (REDIRECT_FLOW_4_FOOTER_ID | REDIRECT_FLOW_4_FOOTER_ID_OLD) {
 		if len(slice) < V4_LEN {
 			return UdpFlow{}, 0, fmt.Errorf("v4 not have space")
 		}
+		debug.Printf("FromTailUdpFlow: bytes v4: %+v\n", slice[len(slice)-V4_LEN:])
 		reader := bytes.NewReader(slice[len(slice)-V4_LEN:])
 
 		var err error
@@ -103,7 +105,8 @@ func FromTailUdpFlow(slice []byte) (UdpFlow, uint64, error) {
 		if len(slice) < V6_LEN {
 			return UdpFlow{}, footer, fmt.Errorf("v6 not have space")
 		}
-		reader := bytes.NewReader(slice[len(slice)-V4_LEN:])
+		debug.Printf("FromTailUdpFlow: bytes v4: %+v\n", slice[len(slice)-V6_LEN:])
+		reader := bytes.NewReader(slice[len(slice)-V6_LEN:])
 
 		var err error
 		var src_ip, dst_ip []byte
@@ -122,5 +125,6 @@ func FromTailUdpFlow(slice []byte) (UdpFlow, uint64, error) {
 		point.Flow = flow
 		return point, 0, nil
 	}
+	debug.Printf("Cannot reader tail udp flow, bytes: %+v\n", slice)
 	return UdpFlow{}, footer, fmt.Errorf("read fotter")
 }

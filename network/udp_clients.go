@@ -2,11 +2,9 @@ package network
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/netip"
 	"reflect"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,11 +16,10 @@ type UdpClient struct {
 	clientKey      ClientKey
 	sendFlow       tunnel.UdpFlow
 	udpTunnel      tunnel.UdpTunnel
-	localUdp       net.UDPConn
+	localUdp       *net.UDPConn
 	localStartAddr netip.AddrPort
 	tunnelFromPort uint16
 	tunnelToPort   uint16
-	udpClientsLock sync.Mutex
 	udpClients     map[ClientKey]UdpClient
 	lastActivity   atomic.Uint32
 }
@@ -47,7 +44,7 @@ func (self *HostToTunnelForwarder) Run() {
 		self.localUdp.SetReadDeadline(time.Now().Add(time.Second * 30))
 		size, source, err := self.localUdp.ReadFromUDPAddrPort(buffer)
 		if err != nil {
-			log.Println(err)
+			debug.Println(err)
 			break
 		} else if source.Addr().Compare(self.localStartAddr.Addr()) != 0 {
 			// "dropping packet from different unexpected source"
@@ -69,12 +66,10 @@ func (self *HostToTunnelForwarder) Run() {
 		}
 	}
 
-	self.UdpClient.udpClientsLock.Lock()
 	if _, is := self.UdpClient.udpClients[self.clientKey]; is {
 		// if !reflect.DeepEqual(v, self) {} else {}
 		delete(self.UdpClient.udpClients, self.clientKey)
 	}
-	self.UdpClient.udpClientsLock.Unlock()
 }
 
 type ClientKey struct {
@@ -84,7 +79,6 @@ type ClientKey struct {
 type UdpClients struct {
 	udpTunnel        tunnel.UdpTunnel
 	lookup           AddressLookup[netip.AddrPort]
-	udpClientsLocker sync.Mutex
 	udpClients       map[ClientKey]UdpClient
 	UseSpecialLan    bool
 }
@@ -93,7 +87,6 @@ func NewUdpClients(Tunnel tunnel.UdpTunnel, Lookup AddressLookup[netip.AddrPort]
 	return UdpClients{
 		udpTunnel:        Tunnel,
 		lookup:           Lookup,
-		udpClientsLocker: sync.Mutex{},
 		udpClients:       make(map[ClientKey]UdpClient),
 		UseSpecialLan:    true,
 	}
@@ -116,9 +109,6 @@ func (self *UdpClients) ForwardPacket(Flow tunnel.UdpFlow, data []byte) error {
 			return client.SendLocal(flowDst.Port(), data)
 		}
 	}
-
-	defer self.udpClientsLocker.Unlock()
-	self.udpClientsLocker.Lock()
 
 	client, err := func() (*UdpClient, error) {
 		for kkey, client := range self.udpClients {
@@ -151,7 +141,7 @@ func (self *UdpClients) ForwardPacket(Flow tunnel.UdpFlow, data []byte) error {
 		client := UdpClient{
 			clientKey:      key,
 			sendFlow:       sendFlow,
-			localUdp:       *usock,
+			localUdp:       usock,
 			udpTunnel:      self.udpTunnel,
 			localStartAddr: localAddr,
 			tunnelFromPort: found.FromPort,
